@@ -72,8 +72,8 @@ A high-performance C++ implementation of the Variant Effect Predictor (VEP) for 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/vep_annotator.git
-cd vep_annotator
+git clone https://github.com/dcho108803/vep-annotator.git
+cd vep-annotator
 
 # Build
 mkdir build && cd build
@@ -474,7 +474,7 @@ If you use this software in your research, please cite:
 
 ```
 VEP Annotator: A high-performance C++ variant effect predictor
-https://github.com/yourusername/vep_annotator
+https://github.com/dcho108803/vep-annotator
 ```
 
 ## Acknowledgments
@@ -490,5 +490,5 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/vep_annotator/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/vep_annotator/discussions)
+- **Issues**: [GitHub Issues](https://github.com/dcho108803/vep-annotator/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/dcho108803/vep-annotator/discussions)

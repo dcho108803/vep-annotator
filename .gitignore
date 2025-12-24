@@ -1,0 +1,47 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.dylib
+
+# Executable
+vep_annotator
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Data files (too large for git)
+data/
+*.fa
+*.fa.gz
+*.fasta
+*.fasta.gz
+*.gtf
+*.gtf.gz
+*.gff
+*.gff.gz
+*.gff3
+*.gff3.gz
+*.vcf
+*.vcf.gz
+*.bgz
+*.tbi
+*.bw
+*.bigwig
+*.txt.gz
+
+# Logs
+*.log
+
+# Claude
+.claude/

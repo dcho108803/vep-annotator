@@ -129,20 +129,37 @@ if(HAVE_BIGWIG)
     target_link_libraries(vep_annotator_lib PUBLIC ${BIGWIG_LIBRARIES})
 endif()
 
-# Create executable
+# Create main executable
 add_executable(vep_annotator src/main.cpp)
 target_link_libraries(vep_annotator
     PRIVATE
         vep_annotator_lib
 )
 
+# Create filter_vep executable
+add_executable(filter_vep src/filter_vep.cpp)
+target_include_directories(filter_vep PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(filter_vep
+    PRIVATE
+        ${ZLIB_LIBRARIES}
+)
+
 # Installation
-install(TARGETS vep_annotator DESTINATION bin)
+install(TARGETS vep_annotator filter_vep DESTINATION bin)
 install(TARGETS vep_annotator_lib DESTINATION lib)
 install(FILES
     include/vep_annotator.hpp
     include/annotation_source.hpp
+    include/annotation_sources.hpp
     include/file_parsers.hpp
+    include/plugin.hpp
+    include/output_writer.hpp
+    include/transcript_filter.hpp
+    include/structural_variant.hpp
+    include/hgvs_parser.hpp
+    include/gene_constraint.hpp
+    include/exon_intron_numbers.hpp
+    include/filter_vep.hpp
     DESTINATION include)
 
 # Print configuration summary

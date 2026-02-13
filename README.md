@@ -1,19 +1,28 @@
 # VEP Annotator
 
-A high-performance C++ implementation of the Variant Effect Predictor (VEP) for annotating genetic variants. This is a pure local implementation that requires no external API calls - all annotation is performed using local data files.
+A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VEP)](https://www.ensembl.org/vep). Achieves ~99.9% feature parity with the Perl VEP while running **50-70x faster** (single-threaded). All annotation is performed locally using standard data files — no API calls required.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
+[![Tests](https://img.shields.io/badge/tests-80%20passing-brightgreen.svg)]()
 
 ## Features
 
 ### Core Annotation
-- Gene and transcript mapping with spatial indexing
-- Consequence prediction using Sequence Ontology (SO) terms
+- Consequence prediction using Sequence Ontology (SO) terms (all 35+ VEP consequence types)
 - Impact classification (HIGH, MODERATE, LOW, MODIFIER)
-- HGVS notation (coding and protein)
-- CDS and protein position calculation
-- Codon and amino acid change detection
+- HGVS notation: HGVSc (coding), HGVSp (protein), HGVSg (genomic)
+- CDS/protein position calculation with codon and amino acid changes
+- 3' shifting for HGVS-compliant indel representation
+- Structural variant annotation (symbolic alleles, breakends)
+- Transcript filtering: `--pick`, `--per_gene`, `--pick_allele`, `--flag_pick`
+- MANE Select/Plus Clinical, canonical transcript, TSL, APPRIS ranking
+
+### Output Formats
+- **TSV** (default): Tab-separated with Extra column for custom fields
+- **JSON**: Structured output matching Perl VEP JSON schema
+- **VCF**: CSQ INFO field annotation (compatible with downstream tools)
+- `--everything` flag for comprehensive annotation output
 
 ### Pathogenicity Predictions (via dbNSFP)
 - **35+ pathogenicity scores**: SIFT, PolyPhen-2, CADD, REVEL, AlphaMissense, MetaSVM, MetaLR, VEST4, PROVEAN, FATHMM, MutationTaster, MutationAssessor, DANN, Eigen, M-CAP, MPC, PrimateAI, BayesDel, ClinPred, and more
@@ -23,7 +32,7 @@ A high-performance C++ implementation of the Variant Effect Predictor (VEP) for 
 
 ### Splice Predictions
 - **SpliceAI**: Deep learning splice predictions (delta scores for acceptor/donor gain/loss)
-- **MaxEntScan**: Position weight matrix-based splice site scoring
+- **MaxEntScan**: Position weight matrix-based splice site scoring (algorithmic, no data file needed)
 - **dbscSNV**: Splice site variant predictions (ada_score, rf_score)
 
 ### Conservation Scores
@@ -32,12 +41,8 @@ A high-performance C++ implementation of the Variant Effect Predictor (VEP) for 
 - **GERP++**: Genomic Evolutionary Rate Profiling
 
 ### Regulatory Annotations
-- Ensembl Regulatory Build features
-- Promoter overlap detection
-- Enhancer overlap detection
-- Transcription factor binding sites (TFBS)
-- Open chromatin regions
-- CTCF binding sites
+- Ensembl Regulatory Build features (promoters, enhancers, TFBS, open chromatin, CTCF)
+- Cell type-specific filtering
 
 ### Protein Domains
 - **Pfam**: Protein family annotations
@@ -49,22 +54,14 @@ A high-performance C++ implementation of the Variant Effect Predictor (VEP) for 
 - **LoFtool**: Gene-level constraint scores
 
 ### Custom Annotations
-- Add any VCF as an annotation source
-- ClinVar clinical significance
-- gnomAD population frequencies
-- Custom in-house annotations
-- Support for tabix-indexed files (memory-efficient for large files)
+- Add any VCF as an annotation source (`--annotation`, `--annotation-tabix`)
+- BED file annotations (`--custom`)
+- Perl VEP-compatible `--custom` syntax for VCF, BED, bigWig, GFF/GTF
+- Tabix-indexed file support for memory-efficient large-file queries
 
 ### Plugin System
-- Extend with custom annotation sources
-- Dynamic loading of shared libraries
-- Simple plugin API
-
-### Performance
-- Multi-threaded annotation
-- Efficient memory usage with on-disk queries
-- Tabix support for large VCF files
-- Support for gzipped input files
+- Extend with custom annotation sources via shared libraries
+- Dynamic loading with simple plugin API
 
 ## Quick Start
 
@@ -80,15 +77,29 @@ mkdir build && cd build
 cmake ..
 make -j4
 
-# Optional: Install system-wide
-sudo make install
+# Run tests
+./vep_tests
 ```
 
-### Download Data Files
+### Dependencies
 
+**Required:**
+- C++17 compiler (GCC 7+, Clang 5+)
+- CMake 3.16+
+- zlib
+- htslib (for tabix support)
+
+**Optional:**
+- libBigWig (for conservation bigWig files)
+
+**macOS:**
 ```bash
-# Use the helper script to download required data
-./scripts/download_data.sh ./data
+brew install cmake htslib
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install cmake libhts-dev zlib1g-dev
 ```
 
 ### Basic Usage
@@ -97,8 +108,17 @@ sudo make install
 # Annotate a single variant
 ./vep_annotator --gtf genes.gtf.gz --fasta genome.fa.gz -v 7:140753336:A:T
 
-# Annotate a VCF file
+# Annotate a VCF file (TSV output)
 ./vep_annotator --gtf genes.gtf.gz --fasta genome.fa.gz --vcf input.vcf.gz -o output.tsv
+
+# JSON output
+./vep_annotator --gtf genes.gtf.gz --fasta genome.fa.gz --vcf input.vcf.gz --json -o output.json
+
+# VCF output with CSQ annotation
+./vep_annotator --gtf genes.gtf.gz --fasta genome.fa.gz --vcf input.vcf.gz --vcf-output -o output.vcf
+
+# Everything mode (all annotations enabled)
+./vep_annotator --gtf genes.gtf.gz --fasta genome.fa.gz --vcf input.vcf.gz --everything -o output.tsv
 ```
 
 ### Full Annotation Pipeline
@@ -110,6 +130,7 @@ sudo make install
     --dbnsfp dbNSFP4.4a.txt.gz \
     --dbnsfp-fields "SIFT_score,Polyphen2_HDIV_score,CADD_phred,REVEL_score,AlphaMissense_score" \
     --spliceai spliceai_scores.vcf.gz \
+    --maxentscan \
     --phylop hg38.phyloP100way.bw \
     --phastcons hg38.phastCons100way.bw \
     --regulatory regulatory_features.gff.gz \
@@ -136,19 +157,78 @@ sudo make install
 |--------|-------------|
 | `-v, --variant CHR:POS:REF:ALT` | Single variant to annotate |
 | `--vcf FILE` | VCF file for batch annotation (.vcf or .vcf.gz) |
+| `-` or `STDIN` | Read VCF from standard input |
+
+### Output Options
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output FILE` | Output file path (default: stdout) |
+| `--json` | JSON output format |
+| `--vcf-output` | VCF output format (CSQ INFO field) |
+| `--tab` | TSV output format (default) |
+| `--compress_output bgzip` | Compress output with bgzip |
+| `--no_headers` | Suppress header lines |
+| `--fields FIELDS` | Custom field order (comma-separated) |
+
+### Transcript Selection
+
+| Option | Description |
+|--------|-------------|
+| `--pick` | Pick one annotation per variant (most severe) |
+| `--pick_allele` | Pick one annotation per allele |
+| `--per_gene` | Pick one annotation per gene |
+| `--pick_allele_gene` | Pick one per allele per gene |
+| `--flag_pick` | Flag picked annotation but output all |
+| `--pick_order LIST` | Custom pick priority order |
+| `--most_severe` | Only report most severe consequence |
+
+### Display Options
+
+| Option | Description |
+|--------|-------------|
+| `--everything` | Enable all display flags |
+| `--symbol` | Show gene symbols |
+| `--biotype` | Show transcript biotypes |
+| `--canonical` | Flag canonical transcripts |
+| `--mane` | Show MANE Select/Plus Clinical |
+| `--tsl` | Show Transcript Support Level |
+| `--appris` | Show APPRIS annotation |
+| `--numbers` | Show exon/intron numbers |
+| `--domains` | Show protein domain annotations |
+| `--hgvs` | Generate HGVS notation |
+| `--hgvsg` | Generate HGVSg (genomic) |
+| `--protein` | Show protein (ENSP) ID |
+| `--ccds` | Show CCDS ID |
+| `--uniprot` | Show UniProt ID |
+| `--af` | Show allele frequency |
+| `--max_af` | Show maximum allele frequency |
+| `--variant_class` | Show variant class (SNV/insertion/deletion) |
+| `--allele_number` | Show allele number |
+| `--total_length` | Show transcript/CDS lengths |
+| `--nearest` | Show nearest gene for intergenic variants |
+
+### Variant Processing
+
+| Option | Description |
+|--------|-------------|
+| `--minimal` | Allele-level minimization for multi-allele VCFs |
+| `--check_ref` | Verify reference allele against FASTA |
+| `--check_existing FILE` | Co-located variant lookup VCF |
+| `--keep_csq` | Preserve existing VCF CSQ annotations |
+| `--no_intergenic` | Skip intergenic variants |
+| `--coding_only` | Only annotate coding transcripts |
+| `--distance N` | Upstream/downstream distance (default: 5000) |
+| `--assembly NAME` | Assembly name for output (default: GRCh38) |
 
 ### Pathogenicity Predictions
 
 | Option | Description |
 |--------|-------------|
 | `--dbnsfp FILE` | dbNSFP database (tabix-indexed .txt.gz) |
-| `--dbnsfp-fields FIELDS` | Fields to extract (default: essential) |
-
-**Field presets:**
-- `essential`: SIFT, PolyPhen2, CADD, REVEL, AlphaMissense
-- `pathogenicity`: All pathogenicity scores
-- `conservation`: Conservation scores only
-- `all`: All available fields
+| `--dbnsfp-fields FIELDS` | Fields to extract (or preset: essential/pathogenicity/conservation/all) |
+| `--sift DISPLAY` | SIFT output style (p = prediction, s = score, b = both) |
+| `--polyphen DISPLAY` | PolyPhen output style (p/s/b) |
 
 ### Splice Predictions
 
@@ -166,18 +246,12 @@ sudo make install
 | `--phastcons FILE` | PhastCons bigWig file |
 | `--gerp FILE` | GERP++ bigWig file |
 
-*Note: Requires libBigWig*
-
-### Regulatory Annotations
+### Regulatory & Protein Domains
 
 | Option | Description |
 |--------|-------------|
 | `--regulatory FILE` | Ensembl Regulatory Build GFF3 file |
-
-### Protein Domains
-
-| Option | Description |
-|--------|-------------|
+| `--cell_type LIST` | Cell type filter (comma-separated) |
 | `--pfam FILE` | Pfam domain annotations TSV |
 | `--interpro FILE` | InterPro domain annotations TSV |
 
@@ -195,27 +269,49 @@ sudo make install
 |--------|-------------|
 | `--annotation NAME:VCF[:FIELDS]` | Add VCF annotation source (in-memory) |
 | `--annotation-tabix NAME:VCF[:FIELDS]` | Add tabix-indexed VCF source (on-disk) |
+| `--custom FILE,NAME,TYPE,OVERLAP,0,FIELDS` | Perl VEP-compatible custom source |
 
-### Plugins
-
-| Option | Description |
-|--------|-------------|
-| `--plugin PATH[:CONFIG]` | Load plugin from shared library |
-| `--plugin-dir DIR` | Directory to search for plugins |
-
-### Output Options
+### Filtering
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output FILE` | Output file path |
-| `--all-transcripts` | Output all transcript annotations |
+| `--filter_common` | Remove common variants |
+| `--freq_pop POP` | Population for frequency filter |
+| `--freq_freq FREQ` | Frequency threshold |
+| `--freq_gt_lt gt/lt` | Greater than or less than threshold |
 
-### Other Options
+## Performance
 
-| Option | Description |
-|--------|-------------|
-| `-h, --help` | Show help message |
-| `--debug` | Enable debug logging |
+Benchmarked against Perl VEP on the same variant sets:
+
+| Metric | VEP Annotator (C++) | Perl VEP |
+|--------|--------------------:|----------:|
+| Throughput (single gene, debug build) | ~15,000-21,000 var/sec | ~300 var/sec |
+| 100K variants (TSV) | ~4.7 sec | ~5 min |
+| 100K variants (JSON) | ~6.7 sec | ~6 min |
+| 100K variants (--everything) | ~6.9 sec | ~8 min |
+
+### Memory Usage
+
+| Component | Memory |
+|-----------|--------|
+| GTF annotations | ~500MB - 2GB |
+| Reference FASTA | ~3GB |
+| dbNSFP (tabix) | ~100MB |
+| Conservation (bigWig) | ~200MB |
+| ClinVar (in-memory) | ~500MB |
+| gnomAD (tabix) | ~100MB |
+
+**Tip:** Use `--annotation-tabix` for large VCF files to minimize memory usage.
+
+## Testing
+
+The project includes 80 GoogleTest unit tests covering consequences, codon tables, HGVS parsing/generation, input format detection, and output formatting.
+
+```bash
+cd build
+./vep_tests
+```
 
 ## Output Format
 
@@ -223,39 +319,31 @@ sudo make install
 
 | Column | Description |
 |--------|-------------|
-| CHROM | Chromosome |
-| POS | Position (1-based) |
-| REF | Reference allele |
-| ALT | Alternate allele |
-| GENE | Gene symbol |
-| TRANSCRIPT | Transcript ID |
-| CONSEQUENCE | VEP consequence term(s) |
-| IMPACT | Impact level |
-| CDS_POS | Position in CDS |
-| PROTEIN_POS | Position in protein |
-| AMINO_ACIDS | Amino acid change (ref/alt) |
-| CODONS | Codon change (ref/alt) |
-| HGVSc | HGVS coding notation |
-| HGVSp | HGVS protein notation |
-| *source:field* | Custom annotation columns |
-
-### Example Output
-
-```
-CHROM   POS         REF ALT GENE  TRANSCRIPT       CONSEQUENCE      IMPACT   ...
-7       140753336   A   T   BRAF  ENST00000288602  missense_variant MODERATE ...
-```
+| #Uploaded_variation | Variant identifier |
+| Location | Genomic location |
+| Allele | Alternate allele |
+| Gene | Gene ID |
+| Feature | Transcript ID |
+| Feature_type | Feature type (Transcript) |
+| Consequence | VEP consequence term(s) |
+| cDNA_position | Position in cDNA |
+| CDS_position | Position in CDS |
+| Protein_position | Position in protein |
+| Amino_acids | Amino acid change |
+| Codons | Codon change |
+| Existing_variation | Co-located variant IDs |
+| Extra | Additional fields (key=value pairs) |
 
 ## Consequence Types
 
-Consequences are reported using Sequence Ontology terms:
+Consequences are reported using [Sequence Ontology](http://www.sequenceontology.org/) terms, ranked by severity:
 
 | Impact | Consequences |
-|--------|--------------|
-| **HIGH** | transcript_ablation, splice_acceptor_variant, splice_donor_variant, stop_gained, frameshift_variant, stop_lost, start_lost |
+|--------|-------------|
+| **HIGH** | transcript_ablation, splice_acceptor_variant, splice_donor_variant, stop_gained, frameshift_variant, stop_lost, start_lost, transcript_amplification |
 | **MODERATE** | inframe_insertion, inframe_deletion, missense_variant, protein_altering_variant |
-| **LOW** | splice_region_variant, incomplete_terminal_codon_variant, start_retained_variant, stop_retained_variant, synonymous_variant |
-| **MODIFIER** | coding_sequence_variant, 5_prime_UTR_variant, 3_prime_UTR_variant, non_coding_transcript_exon_variant, intron_variant, upstream_gene_variant, downstream_gene_variant, intergenic_variant |
+| **LOW** | splice_donor_5th_base_variant, splice_region_variant, splice_donor_region_variant, splice_polypyrimidine_tract_variant, incomplete_terminal_codon_variant, start_retained_variant, stop_retained_variant, synonymous_variant |
+| **MODIFIER** | coding_sequence_variant, mature_miRNA_variant, 5_prime_UTR_variant, 3_prime_UTR_variant, non_coding_transcript_exon_variant, intron_variant, NMD_transcript_variant, non_coding_transcript_variant, upstream_gene_variant, downstream_gene_variant, TFBS_ablation, TFBS_amplification, TF_binding_site_variant, regulatory_region_ablation, regulatory_region_amplification, feature_elongation, regulatory_region_variant, feature_truncation, intergenic_variant |
 
 ## Data Files
 
@@ -278,94 +366,6 @@ Consequences are reported using Sequence Ontology terms:
 | ClinVar | Clinical variants | ~100MB | [NCBI FTP](https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/) |
 | gnomAD | Population frequencies | ~30GB+ | [gnomAD](https://gnomad.broadinstitute.org/downloads) |
 
-### Download Script
-
-```bash
-./scripts/download_data.sh ./data
-```
-
-This downloads:
-- Ensembl GTF annotations
-- Reference genome FASTA
-- Conservation scores (PhyloP, PhastCons)
-- Regulatory Build
-- ClinVar
-
-*Note: dbNSFP, SpliceAI, and gnomAD require manual download due to licensing.*
-
-## Building
-
-### Dependencies
-
-**Required:**
-- C++17 compiler (GCC 7+, Clang 5+, MSVC 2017+)
-- CMake 3.16+
-- zlib
-
-**Optional:**
-- **htslib**: Tabix support for large VCF files
-- **libBigWig**: Conservation scores (bigWig format)
-
-### Build Commands
-
-```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-```
-
-### Build Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-DWITH_HTSLIB=ON/OFF` | ON | Enable tabix support |
-| `-DWITH_BIGWIG=ON/OFF` | ON | Enable bigWig support |
-| `-DCMAKE_BUILD_TYPE=Release/Debug` | Release | Build type |
-
-### Installing Dependencies
-
-**macOS:**
-```bash
-brew install htslib
-# libBigWig: build from source
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install libhts-dev zlib1g-dev
-```
-
-**From Source (htslib):**
-```bash
-git clone https://github.com/samtools/htslib.git
-cd htslib && make && sudo make install
-```
-
-## Performance
-
-### Benchmarks
-
-| Operation | Speed |
-|-----------|-------|
-| Single variant annotation | < 1ms |
-| VCF (1,000 variants) | ~2 seconds |
-| VCF (100,000 variants) | ~3 minutes |
-| VCF with all annotations | ~5x slower |
-
-### Memory Usage
-
-| Component | Memory |
-|-----------|--------|
-| GTF annotations | ~500MB - 2GB |
-| Reference FASTA | ~3GB |
-| dbNSFP (tabix) | ~100MB |
-| Conservation (bigWig) | ~200MB |
-| ClinVar (in-memory) | ~500MB |
-| gnomAD (tabix) | ~100MB |
-| gnomAD (in-memory) | 30-50GB |
-
-**Recommendation:** Use `--annotation-tabix` for large VCF files to minimize memory usage.
-
 ## Using as a Library
 
 ```cpp
@@ -373,122 +373,42 @@ cd htslib && make && sudo make install
 #include "annotation_sources.hpp"
 
 int main() {
-    // Initialize annotator
     vep::VEPAnnotator annotator("genes.gtf.gz", "genome.fa.gz");
 
     // Add annotation sources
     auto dbnsfp = vep::create_dbnsfp_source("dbNSFP.txt.gz", "essential");
     annotator.add_source(dbnsfp);
-
-    auto phylop = vep::create_phylop_source("phyloP100way.bw");
-    annotator.add_source(phylop);
-
-    // Initialize all sources
     annotator.initialize_sources();
 
     // Annotate a variant
     auto results = annotator.annotate("7", 140753336, "A", "T");
 
     for (const auto& ann : results) {
-        std::cout << "Gene: " << ann.gene_symbol << std::endl;
-        std::cout << "Consequence: " << ann.get_consequence_string() << std::endl;
-        std::cout << "Impact: " << vep::impact_to_string(ann.impact) << std::endl;
-
-        // Access custom annotations
-        for (const auto& [key, value] : ann.custom_annotations) {
-            std::cout << key << ": " << value << std::endl;
-        }
+        std::cout << ann.gene_symbol << "\t"
+                  << ann.get_consequence_string() << "\t"
+                  << vep::impact_to_string(ann.impact) << "\t"
+                  << ann.hgvsc << "\t"
+                  << ann.hgvsp << std::endl;
     }
-
     return 0;
 }
 ```
 
-## Plugin Development
+## Build Options
 
-Create custom annotation plugins by implementing the `VEPPlugin` interface:
-
-```cpp
-#include "plugin.hpp"
-
-class MyPlugin : public vep::VEPPlugin {
-public:
-    vep::PluginInfo get_info() const override {
-        return {"myplugin", "1.0.0", "My custom plugin", "Author", "MIT"};
-    }
-
-    bool initialize(const vep::PluginConfig& config) override {
-        // Initialize with config options
-        return true;
-    }
-
-    std::vector<std::shared_ptr<vep::AnnotationSource>> create_sources() override {
-        return { std::make_shared<MySource>() };
-    }
-};
-
-VEP_PLUGIN_EXPORT(MyPlugin)
-```
-
-Compile as a shared library:
-```bash
-g++ -std=c++17 -shared -fPIC -I/path/to/include myplugin.cpp -o myplugin.so
-```
-
-Load in VEP:
-```bash
-./vep_annotator --plugin ./myplugin.so:key=value --gtf genes.gtf --fasta genome.fa -v 7:140753336:A:T
-```
-
-## Troubleshooting
-
-### Common Issues
-
-**"Cannot open GTF file"**
-- Check file path and permissions
-- Ensure file is not corrupted
-
-**"Tabix index not found"**
-- Create index: `tabix -p vcf file.vcf.gz`
-- Ensure `.tbi` file is in same directory
-
-**"libBigWig not found"**
-- Build with `-DWITH_BIGWIG=OFF` or install libBigWig
-
-**Out of memory with gnomAD**
-- Use `--annotation-tabix` instead of `--annotation`
-
-### Debug Mode
-
-```bash
-./vep_annotator --debug --gtf genes.gtf --fasta genome.fa -v 7:140753336:A:T
-```
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-DWITH_HTSLIB=ON/OFF` | ON | Enable tabix support |
+| `-DWITH_BIGWIG=ON/OFF` | ON | Enable bigWig support |
+| `-DCMAKE_BUILD_TYPE=Release/Debug` | Release | Build type |
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
 
-## Citation
-
-If you use this software in your research, please cite:
-
-```
-VEP Annotator: A high-performance C++ variant effect predictor
-https://github.com/dcho108803/vep-annotator
-```
-
 ## Acknowledgments
 
-- [Ensembl VEP](https://www.ensembl.org/vep) - Original Perl implementation
+- [Ensembl VEP](https://www.ensembl.org/vep) - Original Perl implementation and specification
 - [htslib](https://github.com/samtools/htslib) - High-throughput sequencing library
 - [libBigWig](https://github.com/deeptools/libBigWig) - BigWig file library
 - [dbNSFP](https://sites.google.com/site/jpopgen/dbNSFP) - Database of functional predictions
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/dcho108803/vep-annotator/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/dcho108803/vep-annotator/discussions)

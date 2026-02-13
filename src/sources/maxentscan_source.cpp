@@ -10,8 +10,17 @@
 #include <cmath>
 #include <array>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 
 namespace vep {
+
+// Format MaxEntScan score with 3 decimal places (matching Perl VEP output)
+static std::string format_mes_score(double score) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.3f", score);
+    return buf;
+}
 
 /**
  * MaxEntScan 5' splice site position weight matrix
@@ -77,6 +86,21 @@ static const std::array<std::array<double, 4>, 23> MES_3SS_SCORES = {{
     {{ 0.25, 0.25, 0.25, 0.25 }}
 }};
 
+// Helper to reverse complement a DNA sequence
+static std::string reverse_complement(const std::string& seq) {
+    std::string rc(seq.size(), 'N');
+    for (size_t i = 0; i < seq.size(); ++i) {
+        switch (seq[seq.size() - 1 - i]) {
+            case 'A': rc[i] = 'T'; break;
+            case 'T': rc[i] = 'A'; break;
+            case 'C': rc[i] = 'G'; break;
+            case 'G': rc[i] = 'C'; break;
+            default:  rc[i] = 'N'; break;
+        }
+    }
+    return rc;
+}
+
 /**
  * MaxEntScan Annotation Source
  *
@@ -96,9 +120,10 @@ public:
     bool is_ready() const override { return true; }  // Always ready - no data file
 
     void initialize() override {
-        // Nothing to initialize
         log(LogLevel::INFO, "MaxEntScan initialized (algorithmic scoring)");
     }
+
+    void set_reference(const ReferenceGenome* ref) { reference_ = ref; }
 
     void annotate(
         const std::string& chrom,
@@ -106,39 +131,147 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         if (!transcript) return;
 
-        (void)chrom;
-        (void)pos;
-        (void)ref;
-        (void)alt;
+        // Check each exon for splice site proximity and compute scores
+        bool is_minus = (transcript->strand == '-');
 
-        // For each exon in transcript, check if variant is near splice site
-        // and compute MaxEntScan scores
+        for (size_t i = 0; i < transcript->exons.size(); ++i) {
+            const auto& exon = transcript->exons[i];
 
-        // This simplified implementation provides scores when variant
-        // is at a splice site position. Full implementation would need
-        // access to reference sequence to compute context.
+            // 5' splice site (donor): 3bp exon + 6bp intron = 9bp
+            // Plus strand: donor at exon.end, exists when not last exon
+            // Minus strand: donor at exon.start, exists when not first exon
+            bool has_donor = is_minus ? (i > 0) : (i < transcript->exons.size() - 1);
+            if (has_donor) {
+                int donor_start, donor_end;
+                if (is_minus) {
+                    // Minus strand: donor (5'ss) is at exon.start
+                    donor_start = exon.start - 6;
+                    donor_end = exon.start + 2;
+                } else {
+                    // Plus strand: donor (5'ss) is at exon.end
+                    donor_start = exon.end - 2;  // -3 to +6 relative to GT
+                    donor_end = exon.end + 6;
+                }
 
-        // Check if this is a splice region variant
-        bool near_splice = false;
-        for (const auto& exon : transcript->exons) {
-            // Check if within 8bp of exon boundary
-            if (std::abs(pos - exon.start) <= 8 || std::abs(pos - exon.end) <= 8) {
-                near_splice = true;
-                break;
+                if (pos >= donor_start && pos <= donor_end) {
+                    annotations["maxentscan:in_splice_region"] = "true";
+
+                    if (reference_ && reference_->has_chromosome(chrom)) {
+                        // Extract 9bp context for reference
+                        std::string ref_context = reference_->get_sequence(chrom, donor_start, donor_end);
+                        if (is_minus) {
+                            ref_context = reverse_complement(ref_context);
+                        }
+                        if (ref_context.length() == 9) {
+                            double ref_score = score_5ss(ref_context);
+
+                            // Build alt context by substituting the variant
+                            std::string alt_context = ref_context;
+                            int offset = pos - donor_start;
+                            if (ref.length() == 1 && alt.length() == 1 &&
+                                offset >= 0 && offset < 9) {
+                                char alt_base = alt[0];
+                                if (is_minus) {
+                                    switch (alt_base) {
+                                        case 'A': alt_base = 'T'; break;
+                                        case 'T': alt_base = 'A'; break;
+                                        case 'C': alt_base = 'G'; break;
+                                        case 'G': alt_base = 'C'; break;
+                                    }
+                                    // Adjust offset for reverse complement
+                                    offset = 8 - offset;
+                                }
+                                alt_context[offset] = alt_base;
+                                double alt_score = score_5ss(alt_context);
+                                double diff = alt_score - ref_score;
+
+                                if (ref_score > -999.0) {
+                                    annotations["maxentscan:5ss_ref"] = format_mes_score(ref_score);
+                                }
+                                if (alt_score > -999.0) {
+                                    annotations["maxentscan:5ss_alt"] = format_mes_score(alt_score);
+                                }
+                                if (ref_score > -999.0 && alt_score > -999.0) {
+                                    annotations["maxentscan:5ss_diff"] = format_mes_score(diff);
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+
+            // 3' splice site (acceptor): 20bp intron + 3bp exon = 23bp
+            // Plus strand: acceptor at exon.start, exists when not first exon
+            // Minus strand: acceptor at exon.end, exists when not last exon
+            bool has_acceptor = is_minus ? (i < transcript->exons.size() - 1) : (i > 0);
+            if (has_acceptor) {
+                int acceptor_start, acceptor_end;
+                if (is_minus) {
+                    // Minus strand: acceptor (3'ss) is at exon.end
+                    acceptor_start = exon.end - 2;
+                    acceptor_end = exon.end + 20;
+                } else {
+                    // Plus strand: acceptor (3'ss) is at exon.start
+                    acceptor_start = exon.start - 20;  // -20 to +3 relative to AG
+                    acceptor_end = exon.start + 2;
+                }
+
+                if (pos >= acceptor_start && pos <= acceptor_end) {
+                    annotations["maxentscan:in_splice_region"] = "true";
+
+                    if (reference_ && reference_->has_chromosome(chrom)) {
+                        std::string ref_context = reference_->get_sequence(chrom, acceptor_start, acceptor_end);
+                        if (is_minus) {
+                            ref_context = reverse_complement(ref_context);
+                        }
+                        if (ref_context.length() == 23) {
+                            double ref_score = score_3ss(ref_context);
+
+                            std::string alt_context = ref_context;
+                            int offset = pos - acceptor_start;
+                            if (ref.length() == 1 && alt.length() == 1 &&
+                                offset >= 0 && offset < 23) {
+                                char alt_base = alt[0];
+                                if (is_minus) {
+                                    switch (alt_base) {
+                                        case 'A': alt_base = 'T'; break;
+                                        case 'T': alt_base = 'A'; break;
+                                        case 'C': alt_base = 'G'; break;
+                                        case 'G': alt_base = 'C'; break;
+                                    }
+                                    offset = 22 - offset;
+                                }
+                                alt_context[offset] = alt_base;
+                                double alt_score = score_3ss(alt_context);
+                                double diff = alt_score - ref_score;
+
+                                if (ref_score > -999.0) {
+                                    annotations["maxentscan:3ss_ref"] = format_mes_score(ref_score);
+                                }
+                                if (alt_score > -999.0) {
+                                    annotations["maxentscan:3ss_alt"] = format_mes_score(alt_score);
+                                }
+                                if (ref_score > -999.0 && alt_score > -999.0) {
+                                    annotations["maxentscan:3ss_diff"] = format_mes_score(diff);
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
             }
         }
-
-        if (near_splice) {
-            // For splice region variants, we would compute the score
-            // using the surrounding sequence. Here we indicate the variant
-            // is in a MaxEntScan-evaluable region.
-            annotations["maxentscan:in_splice_region"] = "true";
-        }
     }
+
+private:
+    const ReferenceGenome* reference_ = nullptr;
+
+public:
 
     std::vector<std::string> get_fields() const override {
         return {
@@ -221,6 +354,12 @@ private:
  */
 std::shared_ptr<AnnotationSource> create_maxentscan_source() {
     return std::make_shared<MaxEntScanSource>();
+}
+
+std::shared_ptr<AnnotationSource> create_maxentscan_source(const ReferenceGenome* ref) {
+    auto source = std::make_shared<MaxEntScanSource>();
+    source->set_reference(ref);
+    return source;
 }
 
 } // namespace vep

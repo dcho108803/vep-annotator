@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <memory>
 #include <optional>
@@ -72,7 +73,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) = 0;
 
     /**
@@ -96,14 +97,14 @@ public:
     virtual std::string get_data_path() const { return ""; }
 
 protected:
-    mutable std::mutex mutex_;  // For thread safety if needed
+    mutable std::recursive_mutex mutex_;  // For thread safety if needed
 
     /**
      * Ensure the source is initialized
      */
     void ensure_initialized() {
         if (!is_ready()) {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
             if (!is_ready()) {
                 initialize();
             }
@@ -163,7 +164,7 @@ public:
         std::string type;           // Feature type (e.g., "promoter", "enhancer")
         std::string id;             // Feature ID
         char strand = '.';
-        std::map<std::string, std::string> attributes;
+        std::unordered_map<std::string, std::string> attributes;
     };
 
     /**
@@ -200,7 +201,7 @@ public:
     /**
      * Query annotations for a specific variant
      */
-    virtual std::map<std::string, std::string> query(
+    virtual std::unordered_map<std::string, std::string> query(
         const std::string& chrom,
         int pos,
         const std::string& ref,
@@ -252,7 +253,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     );
 
     /**

@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -203,7 +204,7 @@ struct GFF3Feature {
     std::string id;
     std::string name;
     std::string parent;
-    std::map<std::string, std::string> attributes;
+    std::unordered_map<std::string, std::string> attributes;
 
     bool overlaps(int pos) const { return pos >= start && pos <= end; }
     bool overlaps(int s, int e) const { return s <= end && e >= start; }
@@ -362,7 +363,7 @@ std::vector<std::string> split_line(const std::string& line, char delim = '\t');
 /**
  * Parse GFF3 attributes string
  */
-std::map<std::string, std::string> parse_gff3_attributes(const std::string& attrs);
+std::unordered_map<std::string, std::string> parse_gff3_attributes(const std::string& attrs);
 
 /**
  * URL decode a string (for GFF3 attribute values)

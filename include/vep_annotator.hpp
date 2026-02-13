@@ -45,6 +45,9 @@ enum class ConsequenceType {
     FRAMESHIFT_VARIANT,
     STOP_LOST,
     START_LOST,
+    TRANSCRIPT_AMPLIFICATION,
+    FEATURE_ELONGATION,
+    FEATURE_TRUNCATION,
 
     // Moderate impact
     INFRAME_INSERTION,
@@ -53,6 +56,9 @@ enum class ConsequenceType {
     PROTEIN_ALTERING_VARIANT,
 
     // Low impact
+    SPLICE_DONOR_5TH_BASE_VARIANT,
+    SPLICE_DONOR_REGION_VARIANT,
+    SPLICE_POLYPYRIMIDINE_TRACT_VARIANT,
     SPLICE_REGION_VARIANT,
     INCOMPLETE_TERMINAL_CODON_VARIANT,
     START_RETAINED_VARIANT,
@@ -61,6 +67,7 @@ enum class ConsequenceType {
 
     // Modifier
     CODING_SEQUENCE_VARIANT,
+    CODING_TRANSCRIPT_VARIANT,
     MATURE_MIRNA_VARIANT,
     FIVE_PRIME_UTR_VARIANT,
     THREE_PRIME_UTR_VARIANT,
@@ -70,7 +77,14 @@ enum class ConsequenceType {
     NON_CODING_TRANSCRIPT_VARIANT,
     UPSTREAM_GENE_VARIANT,
     DOWNSTREAM_GENE_VARIANT,
+    TFBS_ABLATION,
+    TFBS_AMPLIFICATION,
+    TF_BINDING_SITE_VARIANT,
+    REGULATORY_REGION_ABLATION,
+    REGULATORY_REGION_AMPLIFICATION,
+    REGULATORY_REGION_VARIANT,
     INTERGENIC_VARIANT,
+    SEQUENCE_VARIANT,
 
     UNKNOWN
 };
@@ -99,6 +113,75 @@ Impact get_impact(ConsequenceType type);
  * Get string representation of impact
  */
 std::string impact_to_string(Impact impact);
+
+/**
+ * Get SO variant class string from ref/alt alleles
+ */
+inline std::string get_variant_class(const std::string& ref, const std::string& alt) {
+    if (ref.size() == 1 && alt.size() == 1) return "SNV";
+    if (ref.size() == alt.size()) return "substitution";
+    // Trim common prefix to determine insertion/deletion/indel
+    size_t prefix = 0;
+    while (prefix < ref.size() && prefix < alt.size() && ref[prefix] == alt[prefix]) {
+        ++prefix;
+    }
+    std::string trimmed_ref = ref.substr(prefix);
+    std::string trimmed_alt = alt.substr(prefix);
+    if (trimmed_ref.empty() && !trimmed_alt.empty()) return "insertion";
+    if (!trimmed_ref.empty() && trimmed_alt.empty()) return "deletion";
+    if (!trimmed_ref.empty() && !trimmed_alt.empty()) return "indel";
+    return "sequence_alteration";
+}
+
+/**
+ * Get display term for a consequence type (Perl VEP Constants.pm format)
+ */
+inline std::string consequence_to_display_term(ConsequenceType type) {
+    switch (type) {
+        case ConsequenceType::TRANSCRIPT_ABLATION: return "TRANSCRIPT_ABLATION";
+        case ConsequenceType::SPLICE_ACCEPTOR_VARIANT: return "ESSENTIAL_SPLICE_SITE";
+        case ConsequenceType::SPLICE_DONOR_VARIANT: return "ESSENTIAL_SPLICE_SITE";
+        case ConsequenceType::STOP_GAINED: return "STOP_GAINED";
+        case ConsequenceType::FRAMESHIFT_VARIANT: return "FRAMESHIFT_CODING";
+        case ConsequenceType::STOP_LOST: return "STOP_LOST";
+        case ConsequenceType::START_LOST: return "NON_SYNONYMOUS_CODING";
+        case ConsequenceType::TRANSCRIPT_AMPLIFICATION: return "TRANSCRIPT_AMPLIFICATION";
+        case ConsequenceType::FEATURE_ELONGATION: return "FEATURE_ELONGATION";
+        case ConsequenceType::FEATURE_TRUNCATION: return "FEATURE_TRUNCATION";
+        case ConsequenceType::INFRAME_INSERTION: return "NON_SYNONYMOUS_CODING";
+        case ConsequenceType::INFRAME_DELETION: return "NON_SYNONYMOUS_CODING";
+        case ConsequenceType::MISSENSE_VARIANT: return "NON_SYNONYMOUS_CODING";
+        case ConsequenceType::PROTEIN_ALTERING_VARIANT: return "PROTEIN_ALTERING";
+        case ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT: return "SPLICE_SITE";
+        case ConsequenceType::SPLICE_REGION_VARIANT: return "SPLICE_SITE";
+        case ConsequenceType::SPLICE_DONOR_REGION_VARIANT: return "SPLICE_SITE";
+        case ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT: return "SPLICE_SITE";
+        case ConsequenceType::INCOMPLETE_TERMINAL_CODON_VARIANT: return "PARTIAL_CODON";
+        case ConsequenceType::START_RETAINED_VARIANT: return "SYNONYMOUS_CODING";
+        case ConsequenceType::STOP_RETAINED_VARIANT: return "SYNONYMOUS_CODING";
+        case ConsequenceType::SYNONYMOUS_VARIANT: return "SYNONYMOUS_CODING";
+        case ConsequenceType::CODING_SEQUENCE_VARIANT: return "CODING_UNKNOWN";
+        case ConsequenceType::CODING_TRANSCRIPT_VARIANT: return "CODING_TRANSCRIPT_VARIANT";
+        case ConsequenceType::MATURE_MIRNA_VARIANT: return "WITHIN_MATURE_miRNA";
+        case ConsequenceType::FIVE_PRIME_UTR_VARIANT: return "5PRIME_UTR";
+        case ConsequenceType::THREE_PRIME_UTR_VARIANT: return "3PRIME_UTR";
+        case ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT: return "WITHIN_NON_CODING_GENE";
+        case ConsequenceType::INTRON_VARIANT: return "INTRONIC";
+        case ConsequenceType::NMD_TRANSCRIPT_VARIANT: return "NMD_TRANSCRIPT";
+        case ConsequenceType::NON_CODING_TRANSCRIPT_VARIANT: return "WITHIN_NON_CODING_GENE";
+        case ConsequenceType::UPSTREAM_GENE_VARIANT: return "UPSTREAM";
+        case ConsequenceType::DOWNSTREAM_GENE_VARIANT: return "DOWNSTREAM";
+        case ConsequenceType::TFBS_ABLATION: return "TFBS_ABLATION";
+        case ConsequenceType::TFBS_AMPLIFICATION: return "TFBS_AMPLIFICATION";
+        case ConsequenceType::TF_BINDING_SITE_VARIANT: return "REGULATORY_REGION";
+        case ConsequenceType::REGULATORY_REGION_ABLATION: return "REGULATORY_ABLATION";
+        case ConsequenceType::REGULATORY_REGION_AMPLIFICATION: return "REGULATORY_AMPLIFICATION";
+        case ConsequenceType::REGULATORY_REGION_VARIANT: return "REGULATORY_REGION";
+        case ConsequenceType::INTERGENIC_VARIANT: return "INTERGENIC";
+        case ConsequenceType::SEQUENCE_VARIANT: return "SEQUENCE_VARIANT";
+        default: return "UNKNOWN";
+    }
+}
 
 /**
  * Represents an exon within a transcript
@@ -132,6 +215,16 @@ struct Transcript {
     char strand;                    // '+' or '-'
     std::string biotype;            // protein_coding, lncRNA, etc.
     bool is_canonical = false;
+    std::string ccds_id;
+    std::string protein_id;         // Ensembl protein ID (ENSP)
+    std::string version;            // Transcript version (e.g., "5")
+    std::string mane_select;        // MANE Select tag value (e.g., "NM_000546.6")
+    std::string mane_plus_clinical; // MANE Plus Clinical tag value
+    int tsl = 0;                    // Transcript Support Level (1-5, 0=unknown)
+    std::string appris;             // APPRIS annotation (e.g., "principal1")
+    bool gencode_basic = false;     // Part of GENCODE basic set
+    bool cds_start_NF = false;      // CDS start not found (incomplete 5' end)
+    bool cds_end_NF = false;        // CDS end not found (incomplete 3' end)
 
     std::vector<Exon> exons;
     std::vector<CDS> cds_regions;
@@ -157,6 +250,8 @@ struct Gene {
     int end;
     char strand;
     std::string biotype;
+    std::string source;             // Gene source (e.g., "ensembl_havana", "havana")
+    std::string hgnc_id;            // HGNC gene ID (e.g., "HGNC:1097")
 
     std::vector<std::string> transcript_ids;
 };
@@ -176,6 +271,7 @@ struct VariantAnnotation {
     std::string gene_id;
     std::string transcript_id;
     std::string biotype;
+    std::string feature_type = "Transcript";  // "Transcript", "RegulatoryFeature", "MotifFeature"
     bool is_canonical = false;
 
     // Consequence
@@ -185,19 +281,47 @@ struct VariantAnnotation {
     // Position details
     int exon_number = 0;
     int intron_number = 0;
+    int total_exons = 0;
+    int total_introns = 0;
+    int cdna_position = 0;
+    int cdna_end = 0;           // End position for multi-base variants
     int cds_position = 0;
+    int cds_end = 0;            // End position for multi-base variants
     int protein_position = 0;
+    int protein_end = 0;        // End position for multi-base variants
+    int distance = 0;           // Distance to transcript for upstream/downstream variants
+    char strand = '\0';         // Transcript strand ('+' or '-')
+    std::string source;         // Transcript source ("Ensembl" or "RefSeq")
+
+    // Display alleles (Ensembl format: stripped shared leading base, "-" for empty)
+    std::string display_ref;            // Ensembl-format REF (e.g., "TG" for VCF REF="ATG")
+    std::string display_alt;            // Ensembl-format ALT (e.g., "-" for VCF deletion)
+    int display_start = 0;              // Ensembl-format start position
+    int display_end = 0;                // Ensembl-format end position
 
     // Sequence changes
     std::string codons;             // REF/ALT codons (e.g., "Gcc/Acc")
     std::string amino_acids;        // REF/ALT amino acids (e.g., "A/T")
     std::string hgvsc;              // HGVS coding notation
     std::string hgvsp;              // HGVS protein notation
+    std::string hgvsg;              // HGVS genomic notation
+
+    // Co-located known variants (e.g., rs IDs from dbSNP)
+    std::string existing_variation;
+
+    // Original VCF fields for passthrough
+    std::string vcf_id;              // VCF ID column (col 2)
+    std::string vcf_qual;            // VCF QUAL column (col 5)
+    std::string vcf_filter;          // VCF FILTER column (col 6)
+    std::string vcf_info;            // VCF INFO column (col 7) - original INFO for passthrough
+    std::string vcf_sample_columns;  // FORMAT + sample columns (col 8 onwards)
+    std::string vcf_ref;             // Original VCF REF column (for multi-allele output)
+    std::string vcf_alt;             // Original VCF ALT column (comma-separated for multi-allele)
 
     // Custom annotations from VCF files
     // Key: "source:field" (e.g., "gnomad:AF", "clinvar:CLNSIG")
     // Value: annotation value as string
-    std::map<std::string, std::string> custom_annotations;
+    std::unordered_map<std::string, std::string> custom_annotations;
 
     /**
      * Get a custom annotation value
@@ -350,6 +474,17 @@ public:
      * Check if codon is a stop codon
      */
     static bool is_stop_codon(const std::string& codon);
+    static bool is_stop_codon(const std::string& codon, const std::string& chromosome);
+
+    /**
+     * Translate using vertebrate mitochondrial codon table
+     */
+    static char translate_mt(const std::string& codon);
+
+    /**
+     * Translate with automatic table selection based on chromosome
+     */
+    static char translate(const std::string& codon, const std::string& chromosome);
 };
 
 /**
@@ -537,11 +672,39 @@ public:
      */
     void initialize_sources();
 
+    /**
+     * Get transcript by ID (public access for HGVS resolution)
+     */
+    const Transcript* get_transcript(const std::string& transcript_id) const;
+
+    /**
+     * Map CDS position back to genomic coordinate
+     */
+    int map_cds_to_genomic(int cds_pos, const Transcript& transcript) const;
+
+    void set_upstream_distance(int d) { upstream_distance_ = d; }
+    void set_downstream_distance(int d) { downstream_distance_ = d; }
+    void set_shift_3prime(bool v) { shift_3prime_ = v; }
+    void set_shift_genomic(bool v) { shift_genomic_ = v; }
+    void set_transcript_version(bool v) { transcript_version_ = v; }
+    void set_include_numbers(bool v) { include_numbers_ = v; }
+    void set_include_total_length(bool v) { include_total_length_ = v; }
+
+    const ReferenceGenome* get_reference() const { return reference_.get(); }
+
 private:
     std::unique_ptr<TranscriptDatabase> transcript_db_;
     std::unique_ptr<ReferenceGenome> reference_;
     std::unique_ptr<VCFAnnotationDatabase> vcf_annotations_;
     std::unique_ptr<AnnotationSourceManager> source_manager_;
+
+    int upstream_distance_ = 5000;
+    int downstream_distance_ = 5000;
+    bool shift_3prime_ = false;
+    bool shift_genomic_ = false;
+    bool transcript_version_ = false;
+    bool include_numbers_ = false;
+    bool include_total_length_ = false;
 
     /**
      * Annotate variant against a single transcript
@@ -570,6 +733,11 @@ private:
     int calculate_cds_position(int genomic_pos, const Transcript& transcript) const;
 
     /**
+     * Build the CDS sequence for a transcript (builds once, reuse everywhere)
+     */
+    std::string build_cds_sequence(const std::string& chrom, const Transcript& transcript) const;
+
+    /**
      * Get the codon affected by a variant
      */
     std::pair<std::string, std::string> get_affected_codons(
@@ -578,6 +746,62 @@ private:
         const std::string& alt,
         const Transcript& transcript
     ) const;
+
+    /** Overload accepting pre-built CDS sequence */
+    std::pair<std::string, std::string> get_affected_codons(
+        int cds_pos,
+        const std::string& ref,
+        const std::string& alt,
+        const Transcript& transcript,
+        const std::string& cds_seq
+    ) const;
+
+    /**
+     * Annotate coding region: CDS position, codons, amino acids, HGVSc, HGVSp
+     */
+    void annotate_coding_region(
+        const std::string& chrom, int pos,
+        const std::string& ref, const std::string& alt,
+        const Transcript& transcript,
+        const std::string& cached_cds,
+        VariantAnnotation& ann);
+
+    /**
+     * Annotate non-CDS HGVSc: intronic (c.N+/-offset) and UTR (c.-N, c.*N) notation
+     */
+    void annotate_noncds_hgvsc(
+        int pos,
+        const std::string& ref, const std::string& alt,
+        const Transcript& transcript,
+        VariantAnnotation& ann);
+
+    /**
+     * Populate transcript metadata: CCDS, ENSP, CANONICAL, MANE, TSL, APPRIS, etc.
+     */
+    void populate_transcript_metadata(
+        const std::string& chrom, int pos,
+        const std::string& ref, const std::string& alt,
+        const Transcript& transcript,
+        int hgvs_offset,
+        VariantAnnotation& ann);
+
+    /**
+     * Append regulatory consequences based on annotation source flags
+     */
+    void append_regulatory_consequences(VariantAnnotation& ann);
+
+    /**
+     * Right-normalize (3' shift) an indel for HGVS generation
+     */
+    std::tuple<int, std::string, std::string> right_normalize(
+        const std::string& chrom, int pos,
+        const std::string& ref, const std::string& alt,
+        const Transcript& transcript) const;
+
+    /**
+     * Calculate cDNA position (exonic position including UTRs)
+     */
+    int calculate_cdna_position(int genomic_pos, const Transcript& transcript) const;
 
     /**
      * Generate HGVS notation
@@ -589,11 +813,24 @@ private:
         const Transcript& transcript
     ) const;
 
+    /** Overload accepting pre-built CDS sequence */
+    std::string generate_hgvsc(
+        int cds_pos,
+        const std::string& ref,
+        const std::string& alt,
+        const Transcript& transcript,
+        const std::string& cds_seq
+    ) const;
+
     std::string generate_hgvsp(
         const std::string& ref_aa,
         const std::string& alt_aa,
         int protein_pos,
-        const Transcript& transcript
+        const Transcript& transcript,
+        const std::vector<ConsequenceType>& consequences = {},
+        int protein_end = 0,
+        int fs_ter_distance = 0,
+        const std::string& end_ref_aa = ""
     ) const;
 };
 

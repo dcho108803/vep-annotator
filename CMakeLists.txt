@@ -6,14 +6,31 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Export compile commands for clangd/LSP
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Set build type if not specified
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Build options
+option(ENABLE_NATIVE "Enable -march=native for optimized builds" ON)
+option(ENABLE_LTO "Enable Link Time Optimization for Release builds" ON)
+option(ENABLE_SANITIZERS "Enable AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+
 # Compiler flags
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra -Wpedantic")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+
+if(ENABLE_NATIVE AND (CMAKE_BUILD_TYPE STREQUAL "Release"))
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
+endif()
+
+if(ENABLE_SANITIZERS)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 
 # Find required packages
 find_package(ZLIB REQUIRED)
@@ -87,9 +104,7 @@ if(WITH_BIGWIG)
     endif()
 endif()
 
-# Include directories
-include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${ZLIB_INCLUDE_DIRS})
+# Note: include directories are set per-target below via target_include_directories
 
 # Library sources
 set(LIB_SOURCES
@@ -113,7 +128,11 @@ target_link_libraries(vep_annotator_lib
         ${ZLIB_LIBRARIES}
         ${CMAKE_DL_LIBS}
 )
-target_include_directories(vep_annotator_lib PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(vep_annotator_lib
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+        ${ZLIB_INCLUDE_DIRS}
+)
 
 # Add htslib if found
 if(HAVE_HTSLIB)
@@ -127,6 +146,18 @@ if(HAVE_BIGWIG)
     target_compile_definitions(vep_annotator_lib PUBLIC HAVE_BIGWIG)
     target_include_directories(vep_annotator_lib PUBLIC ${BIGWIG_INCLUDE_DIRS})
     target_link_libraries(vep_annotator_lib PUBLIC ${BIGWIG_LIBRARIES})
+endif()
+
+# Enable LTO for Release builds
+if(ENABLE_LTO AND (CMAKE_BUILD_TYPE STREQUAL "Release"))
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT lto_supported OUTPUT lto_output)
+    if(lto_supported)
+        set_property(TARGET vep_annotator_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        message(STATUS "LTO enabled")
+    else()
+        message(STATUS "LTO not supported: ${lto_output}")
+    endif()
 endif()
 
 # Create main executable
@@ -159,8 +190,43 @@ install(FILES
     include/hgvs_parser.hpp
     include/gene_constraint.hpp
     include/exon_intron_numbers.hpp
+    include/dbnsfp_fields.hpp
     include/filter_vep.hpp
     DESTINATION include)
+
+# ========== Test Suite ==========
+option(BUILD_TESTS "Build test suite" ON)
+
+if(BUILD_TESTS)
+    enable_testing()
+
+    # Fetch GoogleTest
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+    )
+    # Prevent GoogleTest from overriding our compiler/linker settings on Windows
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    # Test executable
+    add_executable(vep_tests
+        tests/test_consequences.cpp
+        tests/test_codon_table.cpp
+        tests/test_hgvs.cpp
+    )
+    target_link_libraries(vep_tests
+        PRIVATE
+            vep_annotator_lib
+            GTest::gtest_main
+    )
+    target_include_directories(vep_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+    include(GoogleTest)
+    gtest_discover_tests(vep_tests)
+endif()
 
 # Print configuration summary
 message(STATUS "")

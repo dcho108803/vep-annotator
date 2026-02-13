@@ -46,7 +46,7 @@ public:
     bool is_ready() const override { return loaded_; }
 
     void initialize() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (loaded_) return;
 
         log(LogLevel::INFO, "Loading " + source_name_ + " domains from: " + path_);
@@ -87,18 +87,24 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
         if (!transcript) return;
+        if (!transcript->is_coding()) return;
 
         (void)chrom;
-        (void)pos;
         (void)ref;
         (void)alt;
 
         // Look up domains for this transcript
         auto it = domains_.find(transcript->id);
+        if (it == domains_.end()) {
+            // Try protein_id as fallback
+            if (!transcript->protein_id.empty()) {
+                it = domains_.find(transcript->protein_id);
+            }
+        }
         if (it == domains_.end()) {
             // Try gene name as fallback
             it = domains_.find(transcript->gene_name);
@@ -106,26 +112,33 @@ public:
 
         if (it == domains_.end()) return;
 
-        // Find overlapping domains based on amino acid position
-        // Note: This requires the caller to have computed protein_position
-        // For now, we return all domains for the transcript
+        // Calculate protein position from genomic position
+        int protein_pos = calculate_protein_pos(pos, *transcript);
 
         const auto& domain_list = it->second;
         if (domain_list.empty()) return;
 
-        // Collect domain info
+        // Filter domains by protein position overlap
         std::vector<std::string> domain_ids;
         std::vector<std::string> domain_names;
 
         for (const auto& d : domain_list) {
+            // If we have a valid protein position, filter by overlap
+            if (protein_pos > 0) {
+                if (protein_pos < d.aa_start || protein_pos > d.aa_end) {
+                    continue; // Variant doesn't overlap this domain
+                }
+            }
             domain_ids.push_back(d.domain_id);
             if (!d.domain_name.empty()) {
                 domain_names.push_back(d.domain_name);
             }
         }
 
+        if (domain_ids.empty()) return;
+
         // Format output
-        if (!domain_ids.empty()) {
+        {
             std::ostringstream oss;
             for (size_t i = 0; i < domain_ids.size() && i < 5; ++i) {
                 if (i > 0) oss << ",";
@@ -144,7 +157,32 @@ public:
             annotations[source_name_ + ":domain_name"] = oss.str();
         }
 
-        annotations[source_name_ + ":domain_count"] = std::to_string(domain_list.size());
+        annotations[source_name_ + ":domain_count"] = std::to_string(domain_ids.size());
+    }
+
+    // Calculate protein position from genomic position
+    static int calculate_protein_pos(int genomic_pos, const Transcript& transcript) {
+        int cds_pos = 0;
+        if (transcript.strand == '+') {
+            for (const auto& cds : transcript.cds_regions) {
+                if (genomic_pos >= cds.start && genomic_pos <= cds.end) {
+                    cds_pos += (genomic_pos - cds.start + 1);
+                    return (cds_pos - 1) / 3 + 1;
+                }
+                cds_pos += cds.end - cds.start + 1;
+            }
+        } else {
+            std::vector<CDS> sorted_cds(transcript.cds_regions.rbegin(),
+                                        transcript.cds_regions.rend());
+            for (const auto& cds : sorted_cds) {
+                if (genomic_pos >= cds.start && genomic_pos <= cds.end) {
+                    cds_pos += (cds.end - genomic_pos + 1);
+                    return (cds_pos - 1) / 3 + 1;
+                }
+                cds_pos += cds.end - cds.start + 1;
+            }
+        }
+        return 0;
     }
 
     std::vector<std::string> get_fields() const override {

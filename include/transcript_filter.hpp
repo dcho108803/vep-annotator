@@ -18,6 +18,15 @@
 #include <sstream>
 #include <cctype>
 
+// Case-insensitive consequence set lookup
+inline bool consequence_set_contains(const std::set<std::string>& s, const std::string& term) {
+    if (s.find(term) != s.end()) return true;
+    // Try lowercase comparison
+    std::string lower = term;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s.find(lower) != s.end();
+}
+
 namespace vep {
 
 /**
@@ -32,7 +41,9 @@ enum class PickCriteria {
     BIOTYPE,        // protein_coding preferred
     CCDS,           // Has CCDS annotation
     RANK,           // Consequence severity rank
-    LENGTH          // Transcript length (longer preferred)
+    LENGTH,         // Transcript length (longer preferred)
+    ENSEMBL,        // Prefer Ensembl transcripts
+    REFSEQ          // Prefer RefSeq transcripts
 };
 
 /**
@@ -81,16 +92,17 @@ struct TranscriptFilterConfig {
     bool no_intergenic = false;     // Skip intergenic variants
 
     TranscriptFilterConfig() {
-        // Default pick order
-        pick_order.push_back(PickCriteria::CANONICAL);
+        // Default pick order (matches Perl VEP: MANE before CANONICAL)
         pick_order.push_back(PickCriteria::MANE_SELECT);
+        pick_order.push_back(PickCriteria::MANE_PLUS);
+        pick_order.push_back(PickCriteria::CANONICAL);
         pick_order.push_back(PickCriteria::APPRIS);
         pick_order.push_back(PickCriteria::TSL);
         pick_order.push_back(PickCriteria::BIOTYPE);
         pick_order.push_back(PickCriteria::CCDS);
         pick_order.push_back(PickCriteria::RANK);
         pick_order.push_back(PickCriteria::LENGTH);
-        freq_pop = "gnomAD_AF";
+        freq_pop = "";  // Set by --filter-common (MAX_AF) or --freq-pop
     }
 };
 
@@ -98,33 +110,55 @@ struct TranscriptFilterConfig {
  * Get consequence rank (lower = more severe)
  */
 inline int get_consequence_rank(ConsequenceType csq) {
-    if (csq == ConsequenceType::TRANSCRIPT_ABLATION) return 1;
-    if (csq == ConsequenceType::SPLICE_ACCEPTOR_VARIANT) return 2;
-    if (csq == ConsequenceType::SPLICE_DONOR_VARIANT) return 3;
-    if (csq == ConsequenceType::STOP_GAINED) return 4;
-    if (csq == ConsequenceType::FRAMESHIFT_VARIANT) return 5;
-    if (csq == ConsequenceType::STOP_LOST) return 6;
-    if (csq == ConsequenceType::START_LOST) return 7;
-    if (csq == ConsequenceType::INFRAME_INSERTION) return 8;
-    if (csq == ConsequenceType::INFRAME_DELETION) return 9;
-    if (csq == ConsequenceType::MISSENSE_VARIANT) return 10;
-    if (csq == ConsequenceType::PROTEIN_ALTERING_VARIANT) return 11;
-    if (csq == ConsequenceType::SPLICE_REGION_VARIANT) return 12;
-    if (csq == ConsequenceType::INCOMPLETE_TERMINAL_CODON_VARIANT) return 13;
-    if (csq == ConsequenceType::START_RETAINED_VARIANT) return 14;
-    if (csq == ConsequenceType::STOP_RETAINED_VARIANT) return 15;
-    if (csq == ConsequenceType::SYNONYMOUS_VARIANT) return 16;
-    if (csq == ConsequenceType::CODING_SEQUENCE_VARIANT) return 17;
-    if (csq == ConsequenceType::MATURE_MIRNA_VARIANT) return 18;
-    if (csq == ConsequenceType::FIVE_PRIME_UTR_VARIANT) return 19;
-    if (csq == ConsequenceType::THREE_PRIME_UTR_VARIANT) return 20;
-    if (csq == ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT) return 21;
-    if (csq == ConsequenceType::INTRON_VARIANT) return 22;
-    if (csq == ConsequenceType::NMD_TRANSCRIPT_VARIANT) return 23;
-    if (csq == ConsequenceType::NON_CODING_TRANSCRIPT_VARIANT) return 24;
-    if (csq == ConsequenceType::UPSTREAM_GENE_VARIANT) return 25;
-    if (csq == ConsequenceType::DOWNSTREAM_GENE_VARIANT) return 26;
-    if (csq == ConsequenceType::INTERGENIC_VARIANT) return 27;
+    // Lookup array indexed by ConsequenceType enum value for O(1) access.
+    // Enum order: TRANSCRIPT_ABLATION(0) through UNKNOWN(38)
+    static const int ranks[] = {
+        1,   // TRANSCRIPT_ABLATION
+        2,   // SPLICE_ACCEPTOR_VARIANT
+        3,   // SPLICE_DONOR_VARIANT
+        4,   // STOP_GAINED
+        5,   // FRAMESHIFT_VARIANT
+        6,   // STOP_LOST
+        7,   // START_LOST
+        8,   // TRANSCRIPT_AMPLIFICATION
+        9,   // FEATURE_ELONGATION
+        10,  // FEATURE_TRUNCATION
+        11,  // INFRAME_INSERTION
+        12,  // INFRAME_DELETION
+        13,  // MISSENSE_VARIANT
+        14,  // PROTEIN_ALTERING_VARIANT
+        15,  // SPLICE_DONOR_5TH_BASE_VARIANT
+        17,  // SPLICE_DONOR_REGION_VARIANT
+        18,  // SPLICE_POLYPYRIMIDINE_TRACT_VARIANT
+        16,  // SPLICE_REGION_VARIANT
+        19,  // INCOMPLETE_TERMINAL_CODON_VARIANT
+        20,  // START_RETAINED_VARIANT
+        21,  // STOP_RETAINED_VARIANT
+        22,  // SYNONYMOUS_VARIANT
+        23,  // CODING_SEQUENCE_VARIANT
+        31,  // CODING_TRANSCRIPT_VARIANT
+        24,  // MATURE_MIRNA_VARIANT
+        25,  // FIVE_PRIME_UTR_VARIANT
+        26,  // THREE_PRIME_UTR_VARIANT
+        27,  // NON_CODING_TRANSCRIPT_EXON_VARIANT
+        28,  // INTRON_VARIANT
+        29,  // NMD_TRANSCRIPT_VARIANT
+        30,  // NON_CODING_TRANSCRIPT_VARIANT
+        32,  // UPSTREAM_GENE_VARIANT
+        33,  // DOWNSTREAM_GENE_VARIANT
+        34,  // TFBS_ABLATION
+        35,  // TFBS_AMPLIFICATION
+        36,  // TF_BINDING_SITE_VARIANT
+        37,  // REGULATORY_REGION_ABLATION
+        38,  // REGULATORY_REGION_AMPLIFICATION
+        39,  // REGULATORY_REGION_VARIANT
+        40,  // INTERGENIC_VARIANT
+        41,  // SEQUENCE_VARIANT
+        50,  // UNKNOWN
+    };
+    int idx = static_cast<int>(csq);
+    if (idx >= 0 && idx < static_cast<int>(sizeof(ranks) / sizeof(ranks[0])))
+        return ranks[idx];
     return 50;
 }
 
@@ -167,6 +201,12 @@ inline int compare_appris(const std::string& a, const std::string& b) {
         if (s.find("principal5") != std::string::npos) return 5;
         if (s.find("alternative1") != std::string::npos) return 6;
         if (s.find("alternative2") != std::string::npos) return 7;
+        if (s.find("alternative3") != std::string::npos) return 8;
+        if (s.find("alternative4") != std::string::npos) return 9;
+        if (s.find("alternative5") != std::string::npos) return 10;
+        // Any other APPRIS value
+        if (s.find("principal") != std::string::npos) return 5;
+        if (s.find("alternative") != std::string::npos) return 10;
         return 50;
     };
     return score(a) - score(b);
@@ -188,48 +228,53 @@ public:
     std::vector<VariantAnnotation> filter(
         const std::vector<VariantAnnotation>& annotations) const {
 
-        if (annotations.empty()) return annotations;
+        if (annotations.empty()) return {};
 
-        // Convert to extended annotations
+        // Convert to extended annotations (move into metadata wrappers)
         std::vector<AnnotationWithMeta> extended;
+        extended.reserve(annotations.size());
         for (const auto& ann : annotations) {
             extended.push_back(extend_annotation(ann));
         }
 
-        // Apply basic filters
-        std::vector<AnnotationWithMeta> filtered = apply_basic_filters(extended);
+        // Apply basic filters (in-place via erase-remove)
+        extended.erase(
+            std::remove_if(extended.begin(), extended.end(),
+                [this](const AnnotationWithMeta& ext) { return !passes_basic_filter(ext); }),
+            extended.end());
 
-        // Apply frequency filter if enabled
+        // Apply frequency filter if enabled (in-place)
         if (config_.check_frequency) {
-            filtered = apply_frequency_filter(filtered);
+            apply_frequency_filter_inplace(extended);
         }
 
         // Apply pick/selection logic
         if (config_.pick) {
-            filtered = pick_one(filtered);
+            extended = pick_one(std::move(extended));
         } else if (config_.pick_allele) {
-            filtered = pick_per_allele(filtered);
+            extended = pick_per_allele(std::move(extended));
         } else if (config_.pick_allele_gene) {
-            filtered = pick_per_allele_gene(filtered);
+            extended = pick_per_allele_gene(std::move(extended));
         } else if (config_.per_gene) {
-            filtered = pick_per_gene(filtered);
+            extended = pick_per_gene(std::move(extended));
         } else if (config_.most_severe) {
-            filtered = pick_most_severe(filtered);
+            extended = pick_most_severe(std::move(extended));
         } else if (config_.flag_pick) {
-            flag_picked(filtered);
+            flag_picked(extended);
         } else if (config_.flag_pick_allele) {
-            flag_picked_per_allele(filtered);
+            flag_picked_per_allele(extended);
         } else if (config_.flag_pick_allele_gene) {
-            flag_picked_per_allele_gene(filtered);
+            flag_picked_per_allele_gene(extended);
         }
 
-        // Convert back to VariantAnnotation
+        // Convert back to VariantAnnotation (move out of wrappers)
         std::vector<VariantAnnotation> result;
-        for (auto& ext : filtered) {
-            if (config_.flag_pick && ext.is_picked) {
+        result.reserve(extended.size());
+        for (auto& ext : extended) {
+            if ((config_.flag_pick || config_.flag_pick_allele || config_.flag_pick_allele_gene) && ext.is_picked) {
                 ext.annotation.custom_annotations["PICK"] = "1";
             }
-            result.push_back(ext.annotation);
+            result.push_back(std::move(ext.annotation));
         }
 
         return result;
@@ -263,6 +308,11 @@ private:
             ext.is_mane_select = true;
         }
 
+        auto mane_plus_it = ann.custom_annotations.find("MANE_PLUS_CLINICAL");
+        if (mane_plus_it != ann.custom_annotations.end() && !mane_plus_it->second.empty()) {
+            ext.is_mane_plus = true;
+        }
+
         auto tsl_it = ann.custom_annotations.find("TSL");
         if (tsl_it != ann.custom_annotations.end()) {
             try {
@@ -273,6 +323,18 @@ private:
         auto appris_it = ann.custom_annotations.find("APPRIS");
         if (appris_it != ann.custom_annotations.end()) {
             ext.appris = appris_it->second;
+        }
+
+        auto ccds_it = ann.custom_annotations.find("CCDS");
+        if (ccds_it != ann.custom_annotations.end() && !ccds_it->second.empty()) {
+            ext.has_ccds = true;
+        }
+
+        auto tl_it = ann.custom_annotations.find("TRANSCRIPT_LENGTH");
+        if (tl_it != ann.custom_annotations.end() && !tl_it->second.empty()) {
+            try {
+                ext.transcript_length = std::stoi(tl_it->second);
+            } catch (...) {}
         }
 
         return ext;
@@ -286,14 +348,22 @@ private:
             return false;
         }
 
-        // MANE only
-        if (config_.mane_only && !ext.is_mane_select && !ext.is_mane_plus) {
+        // MANE only (Perl VEP: only MANE Select, not MANE Plus Clinical)
+        if (config_.mane_only && !ext.is_mane_select) {
             return false;
         }
 
         // Coding only
         if (config_.coding_only && ann.biotype != "protein_coding") {
             return false;
+        }
+
+        // GENCODE basic filter
+        if (config_.gencode_basic) {
+            auto gb_it = ann.custom_annotations.find("GENCODE_BASIC");
+            if (gb_it == ann.custom_annotations.end() || gb_it->second != "YES") {
+                return false;
+            }
         }
 
         // Biotype filter
@@ -318,8 +388,8 @@ private:
         if (!config_.include_consequences.empty()) {
             bool has_included = false;
             for (const auto& csq : ann.consequences) {
-                if (config_.include_consequences.find(consequence_to_string(csq))
-                    != config_.include_consequences.end()) {
+                if (consequence_set_contains(config_.include_consequences,
+                                             consequence_to_string(csq))) {
                     has_included = true;
                     break;
                 }
@@ -328,11 +398,18 @@ private:
         }
 
         if (!config_.exclude_consequences.empty()) {
+            // Only exclude if the most severe consequence is in the exclude set
+            int best_rank = 999;
+            std::string most_severe;
             for (const auto& csq : ann.consequences) {
-                if (config_.exclude_consequences.find(consequence_to_string(csq))
-                    != config_.exclude_consequences.end()) {
-                    return false;
+                int r = get_consequence_rank(csq);
+                if (r < best_rank) {
+                    best_rank = r;
+                    most_severe = consequence_to_string(csq);
                 }
+            }
+            if (consequence_set_contains(config_.exclude_consequences, most_severe)) {
+                return false;
             }
         }
 
@@ -345,38 +422,25 @@ private:
         return true;
     }
 
-    std::vector<AnnotationWithMeta> apply_basic_filters(
-        const std::vector<AnnotationWithMeta>& annotations) const {
+    void apply_frequency_filter_inplace(
+        std::vector<AnnotationWithMeta>& annotations) const {
 
-        std::vector<AnnotationWithMeta> result;
-        for (const auto& ext : annotations) {
-            if (passes_basic_filter(ext)) {
-                result.push_back(ext);
-            }
-        }
-        return result;
-    }
-
-    std::vector<AnnotationWithMeta> apply_frequency_filter(
-        const std::vector<AnnotationWithMeta>& annotations) const {
-
-        std::vector<AnnotationWithMeta> result;
-        for (const auto& ext : annotations) {
-            auto it = ext.annotation.custom_annotations.find(config_.freq_pop);
-            if (it != ext.annotation.custom_annotations.end()) {
-                try {
-                    double freq = std::stod(it->second);
-                    bool passes = config_.freq_gt ?
-                        (freq > config_.freq_threshold) :
-                        (freq < config_.freq_threshold);
-                    if (!passes) continue;
-                } catch (...) {
-                    // Keep if can't parse frequency
-                }
-            }
-            result.push_back(ext);
-        }
-        return result;
+        annotations.erase(
+            std::remove_if(annotations.begin(), annotations.end(),
+                [this](const AnnotationWithMeta& ext) {
+                    auto it = ext.annotation.custom_annotations.find(config_.freq_pop);
+                    if (it != ext.annotation.custom_annotations.end()) {
+                        try {
+                            double freq = std::stod(it->second);
+                            bool passes = config_.freq_gt ?
+                                (freq > config_.freq_threshold) :
+                                (freq < config_.freq_threshold);
+                            return !passes;
+                        } catch (...) {}
+                    }
+                    return false;
+                }),
+            annotations.end());
     }
 
     // Compare two annotations based on pick order
@@ -406,10 +470,20 @@ private:
             return tsl_a - tsl_b;
         }
         if (criteria == PickCriteria::BIOTYPE) {
-            // protein_coding is best
-            int score_a = (a.annotation.biotype == "protein_coding") ? 0 : 1;
-            int score_b = (b.annotation.biotype == "protein_coding") ? 0 : 1;
-            return score_a - score_b;
+            // Perl VEP biotype ranking hierarchy
+            auto biotype_score = [](const std::string& bt) -> int {
+                if (bt == "protein_coding") return 0;
+                if (bt == "lncRNA" || bt == "lincRNA") return 1;
+                if (bt == "miRNA") return 2;
+                if (bt == "snRNA") return 3;
+                if (bt == "snoRNA") return 4;
+                if (bt == "rRNA") return 5;
+                if (bt == "misc_RNA") return 6;
+                if (bt == "nonsense_mediated_decay") return 7;
+                if (bt.find("pseudogene") != std::string::npos) return 8;
+                return 9;
+            };
+            return biotype_score(a.annotation.biotype) - biotype_score(b.annotation.biotype);
         }
         if (criteria == PickCriteria::CCDS) {
             return (b.has_ccds ? 1 : 0) - (a.has_ccds ? 1 : 0);
@@ -423,6 +497,20 @@ private:
         if (criteria == PickCriteria::APPRIS) {
             return compare_appris(a.appris, b.appris);
         }
+        if (criteria == PickCriteria::ENSEMBL) {
+            // Prefer Ensembl source (source contains "Ensembl" or "ensembl")
+            auto is_ensembl = [](const std::string& s) {
+                return s.find("Ensembl") != std::string::npos || s.find("ensembl") != std::string::npos;
+            };
+            return (is_ensembl(b.annotation.source) ? 1 : 0) - (is_ensembl(a.annotation.source) ? 1 : 0);
+        }
+        if (criteria == PickCriteria::REFSEQ) {
+            // Prefer RefSeq source
+            auto is_refseq = [](const std::string& s) {
+                return s.find("RefSeq") != std::string::npos || s.find("refseq") != std::string::npos;
+            };
+            return (is_refseq(b.annotation.source) ? 1 : 0) - (is_refseq(a.annotation.source) ? 1 : 0);
+        }
         return 0;
     }
 
@@ -431,14 +519,13 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        // Sort by pick criteria
         std::sort(annotations.begin(), annotations.end(),
             [this](const AnnotationWithMeta& a, const AnnotationWithMeta& b) {
                 return is_better(a, b);
             });
 
         std::vector<AnnotationWithMeta> result;
-        result.push_back(annotations[0]);
+        result.push_back(std::move(annotations[0]));
         return result;
     }
 
@@ -447,18 +534,17 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        // Group by allele
         std::map<std::string, std::vector<AnnotationWithMeta>> by_allele;
-        for (const auto& ann : annotations) {
+        for (auto& ann : annotations) {
             std::string key = ann.annotation.ref_allele + ">" + ann.annotation.alt_allele;
-            by_allele[key].push_back(ann);
+            by_allele[key].push_back(std::move(ann));
         }
 
         std::vector<AnnotationWithMeta> result;
         for (auto& pair : by_allele) {
-            std::vector<AnnotationWithMeta> picked = pick_one(pair.second);
+            auto picked = pick_one(std::move(pair.second));
             if (!picked.empty()) {
-                result.push_back(picked[0]);
+                result.push_back(std::move(picked[0]));
             }
         }
 
@@ -470,17 +556,17 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        // Group by gene
         std::map<std::string, std::vector<AnnotationWithMeta>> by_gene;
-        for (const auto& ann : annotations) {
-            by_gene[ann.annotation.gene_symbol].push_back(ann);
+        for (auto& ann : annotations) {
+            std::string gene_key = ann.annotation.gene_id.empty() ? ann.annotation.gene_symbol : ann.annotation.gene_id;
+            by_gene[gene_key].push_back(std::move(ann));
         }
 
         std::vector<AnnotationWithMeta> result;
         for (auto& pair : by_gene) {
-            std::vector<AnnotationWithMeta> picked = pick_one(pair.second);
+            auto picked = pick_one(std::move(pair.second));
             if (!picked.empty()) {
-                result.push_back(picked[0]);
+                result.push_back(std::move(picked[0]));
             }
         }
 
@@ -492,18 +578,16 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        // Find minimum rank
         int min_rank = 100;
         for (const auto& ann : annotations) {
             int rank = ann.get_rank();
             if (rank < min_rank) min_rank = rank;
         }
 
-        // Return all with minimum rank
         std::vector<AnnotationWithMeta> result;
-        for (const auto& ann : annotations) {
+        for (auto& ann : annotations) {
             if (ann.get_rank() == min_rank) {
-                result.push_back(ann);
+                result.push_back(std::move(ann));
             }
         }
 
@@ -532,19 +616,20 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        // Group by allele and gene
+        // Group by allele and gene (prefer gene_id for uniqueness)
         std::map<std::string, std::vector<AnnotationWithMeta> > by_allele_gene;
-        for (const auto& ann : annotations) {
+        for (auto& ann : annotations) {
+            std::string gene_key = ann.annotation.gene_id.empty() ? ann.annotation.gene_symbol : ann.annotation.gene_id;
             std::string key = ann.annotation.ref_allele + ">" + ann.annotation.alt_allele +
-                              ":" + ann.annotation.gene_symbol;
-            by_allele_gene[key].push_back(ann);
+                              ":" + gene_key;
+            by_allele_gene[key].push_back(std::move(ann));
         }
 
         std::vector<AnnotationWithMeta> result;
         for (auto& pair : by_allele_gene) {
-            std::vector<AnnotationWithMeta> picked = pick_one(pair.second);
+            auto picked = pick_one(std::move(pair.second));
             if (!picked.empty()) {
-                result.push_back(picked[0]);
+                result.push_back(std::move(picked[0]));
             }
         }
 
@@ -591,12 +676,14 @@ private:
     void flag_picked_per_allele_gene(std::vector<AnnotationWithMeta>& annotations) const {
         if (annotations.empty()) return;
 
-        // Group by allele and gene
+        // Group by allele and gene (prefer gene_id for uniqueness)
         std::map<std::string, std::vector<AnnotationWithMeta*> > by_allele_gene;
         for (size_t i = 0; i < annotations.size(); ++i) {
+            std::string gene_key = annotations[i].annotation.gene_id.empty() ?
+                                   annotations[i].annotation.gene_symbol : annotations[i].annotation.gene_id;
             std::string key = annotations[i].annotation.ref_allele + ">" +
                               annotations[i].annotation.alt_allele + ":" +
-                              annotations[i].annotation.gene_symbol;
+                              gene_key;
             by_allele_gene[key].push_back(&annotations[i]);
         }
 
@@ -618,7 +705,7 @@ private:
             for (size_t i = 0; i < annotations.size(); ++i) {
                 if (annotations[i].annotation.ref_allele == temp[0].annotation.ref_allele &&
                     annotations[i].annotation.alt_allele == temp[0].annotation.alt_allele &&
-                    annotations[i].annotation.gene_symbol == temp[0].annotation.gene_symbol &&
+                    annotations[i].annotation.gene_id == temp[0].annotation.gene_id &&
                     annotations[i].annotation.transcript_id == temp[0].annotation.transcript_id) {
                     annotations[i].is_picked = true;
                     break;
@@ -652,13 +739,15 @@ inline std::vector<PickCriteria> parse_pick_order(const std::string& order_str) 
 
         if (token == "canonical") result.push_back(PickCriteria::CANONICAL);
         else if (token == "mane" || token == "mane_select") result.push_back(PickCriteria::MANE_SELECT);
-        else if (token == "mane_plus") result.push_back(PickCriteria::MANE_PLUS);
+        else if (token == "mane_plus" || token == "mane_plus_clinical") result.push_back(PickCriteria::MANE_PLUS);
         else if (token == "appris") result.push_back(PickCriteria::APPRIS);
         else if (token == "tsl") result.push_back(PickCriteria::TSL);
         else if (token == "biotype") result.push_back(PickCriteria::BIOTYPE);
         else if (token == "ccds") result.push_back(PickCriteria::CCDS);
         else if (token == "rank") result.push_back(PickCriteria::RANK);
         else if (token == "length") result.push_back(PickCriteria::LENGTH);
+        else if (token == "ensembl") result.push_back(PickCriteria::ENSEMBL);
+        else if (token == "refseq") result.push_back(PickCriteria::REFSEQ);
     }
 
     return result;

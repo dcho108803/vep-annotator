@@ -159,6 +159,25 @@ inline std::vector<ConsequenceType> get_sv_consequences(
         return consequences;
     }
 
+    // Check for transcript amplification (entire transcript duplicated)
+    if ((sv.sv_type == SVType::DUP || sv.sv_type == SVType::TDUP) &&
+        sv.contains(transcript.start, transcript.end)) {
+        consequences.push_back(ConsequenceType::TRANSCRIPT_AMPLIFICATION);
+        return consequences;
+    }
+
+    // Check for feature elongation (insertion extends the feature)
+    if (sv.sv_type == SVType::INS && sv.overlaps(transcript.start, transcript.end)) {
+        // INS within a transcript extends it
+        consequences.push_back(ConsequenceType::FEATURE_ELONGATION);
+    }
+
+    // Check for feature truncation (partial deletion)
+    if (sv.sv_type == SVType::DEL && sv.overlaps(transcript.start, transcript.end) &&
+        !sv.contains(transcript.start, transcript.end)) {
+        consequences.push_back(ConsequenceType::FEATURE_TRUNCATION);
+    }
+
     // Check for coding sequence effects
     if (transcript.is_coding()) {
         bool affects_cds = false;
@@ -243,10 +262,10 @@ inline std::vector<ConsequenceType> get_sv_consequences(
         }
 
         // Add UTR variants
-        if (affects_utr5 && consequences.empty()) {
+        if (affects_utr5) {
             consequences.push_back(ConsequenceType::FIVE_PRIME_UTR_VARIANT);
         }
-        if (affects_utr3 && consequences.empty()) {
+        if (affects_utr3) {
             consequences.push_back(ConsequenceType::THREE_PRIME_UTR_VARIANT);
         }
 
@@ -327,6 +346,14 @@ inline StructuralVariant parse_sv_from_vcf(
         try {
             sv.sv_len = std::stoi(svlen_it->second);
         } catch (...) {}
+        // If END was not found, derive it from SVLEN
+        if (end_it == info.end() && sv.sv_len != 0) {
+            if (sv.sv_type == SVType::DEL) {
+                sv.end = pos + std::abs(sv.sv_len) - 1;
+            } else if (sv.sv_type == SVType::DUP || sv.sv_type == SVType::INV) {
+                sv.end = pos + std::abs(sv.sv_len) - 1;
+            }
+        }
     } else {
         // Calculate from positions
         if (sv.sv_type == SVType::DEL) {
@@ -465,6 +492,71 @@ inline OverlapType parse_overlap_type(const std::string& type_str) {
     if (lower == "exact") return OverlapType::EXACT;
     if (lower == "reciprocal") return OverlapType::RECIPROCAL;
     return OverlapType::ANY;
+}
+
+/**
+ * Get SV regulatory consequences based on overlap with regulatory features
+ * @param sv Structural variant
+ * @param feature_type Type of regulatory feature (e.g., "promoter", "enhancer", "TF_binding_site")
+ * @param feature_start Start of the regulatory feature
+ * @param feature_end End of the regulatory feature
+ * @return Vector of regulatory consequence types
+ */
+inline std::vector<ConsequenceType> get_sv_regulatory_consequences(
+    const StructuralVariant& sv,
+    const std::string& feature_type,
+    int feature_start, int feature_end) {
+
+    std::vector<ConsequenceType> consequences;
+
+    if (!sv.overlaps(feature_start, feature_end)) {
+        return consequences;
+    }
+
+    bool is_tfbs = (feature_type == "TF_binding_site" || feature_type == "TFBS" ||
+                    feature_type.find("TF_binding") != std::string::npos);
+
+    if (sv.sv_type == SVType::DEL) {
+        if (sv.contains(feature_start, feature_end)) {
+            // Complete deletion of the feature
+            if (is_tfbs) {
+                consequences.push_back(ConsequenceType::TFBS_ABLATION);
+            } else {
+                consequences.push_back(ConsequenceType::REGULATORY_REGION_ABLATION);
+            }
+        } else {
+            // Partial overlap
+            if (is_tfbs) {
+                consequences.push_back(ConsequenceType::TF_BINDING_SITE_VARIANT);
+            } else {
+                consequences.push_back(ConsequenceType::REGULATORY_REGION_VARIANT);
+            }
+        }
+    } else if (sv.sv_type == SVType::DUP || sv.sv_type == SVType::TDUP) {
+        if (sv.contains(feature_start, feature_end)) {
+            // Complete duplication of the feature
+            if (is_tfbs) {
+                consequences.push_back(ConsequenceType::TFBS_AMPLIFICATION);
+            } else {
+                consequences.push_back(ConsequenceType::REGULATORY_REGION_AMPLIFICATION);
+            }
+        } else {
+            if (is_tfbs) {
+                consequences.push_back(ConsequenceType::TF_BINDING_SITE_VARIANT);
+            } else {
+                consequences.push_back(ConsequenceType::REGULATORY_REGION_VARIANT);
+            }
+        }
+    } else {
+        // Other SV types overlapping regulatory features
+        if (is_tfbs) {
+            consequences.push_back(ConsequenceType::TF_BINDING_SITE_VARIANT);
+        } else {
+            consequences.push_back(ConsequenceType::REGULATORY_REGION_VARIANT);
+        }
+    }
+
+    return consequences;
 }
 
 } // namespace vep

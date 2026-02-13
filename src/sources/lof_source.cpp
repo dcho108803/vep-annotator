@@ -45,51 +45,67 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         if (!transcript) return;
+        if (!transcript->is_coding()) return;
 
         (void)chrom;
         (void)ref;
         (void)alt;
 
-        // Check if this is a potential LoF variant based on consequences
-        // (This would typically be done based on the consequence determination
-        // from the main annotator, but we can check position-based features here)
+        // Only classify LoF for truncating consequence types.
+        // Check if the variant is at a position that would cause a LoF consequence:
+        // - In splice donor (2bp after exon end) or acceptor (2bp before exon start)
+        // - In CDS region (potential stop_gained or frameshift)
+        bool is_splice_site = false;
+        bool is_in_cds = false;
+        for (size_t i = 0; i < transcript->exons.size(); ++i) {
+            const auto& exon = transcript->exons[i];
+            // Splice acceptor: 2bp before exon start
+            if (i > 0 && pos >= exon.start - 2 && pos <= exon.start - 1) {
+                is_splice_site = true;
+            }
+            // Splice donor: 2bp after exon end
+            if (i < transcript->exons.size() - 1 && pos >= exon.end + 1 && pos <= exon.end + 2) {
+                is_splice_site = true;
+            }
+        }
+        for (const auto& cds : transcript->cds_regions) {
+            if (pos >= cds.start && pos <= cds.end) {
+                is_in_cds = true;
+                break;
+            }
+        }
+
+        // Only proceed for splice-site or CDS variants (potential LoF)
+        if (!is_splice_site && !is_in_cds) return;
 
         // Check for truncating location in last exon
         bool is_last_exon = false;
         bool is_single_exon = (transcript->exons.size() == 1);
-        int cds_length = 0;
-        int pos_in_cds = 0;
 
-        // Calculate position within CDS
         for (const auto& exon : transcript->exons) {
             if (pos >= exon.start && pos <= exon.end) {
-                // Found the exon
-                if (&exon == &transcript->exons.back()) {
+                // Exons are sorted by genomic position (ascending).
+                // For plus strand: last transcript-order exon = exons.back() (highest genomic pos)
+                // For minus strand: last transcript-order exon = exons.front() (lowest genomic pos)
+                const auto& last_exon = (transcript->strand == '-') ?
+                    transcript->exons.front() : transcript->exons.back();
+                if (&exon == &last_exon) {
                     is_last_exon = true;
                 }
             }
-            // Approximate CDS length (would need actual CDS coordinates for accuracy)
-            cds_length += exon.end - exon.start + 1;
-        }
-
-        // Determine relative position in transcript
-        double relative_pos = 0;
-        if (transcript->end > transcript->start) {
-            relative_pos = static_cast<double>(pos - transcript->start) /
-                          (transcript->end - transcript->start);
         }
 
         // LOFTEE flags and classification
         std::vector<std::string> flags;
         bool is_hc = true;  // Start as HC, downgrade based on flags
 
-        // Flag: Last exon
-        if (is_last_exon && !is_single_exon) {
+        // Flag: Last exon (stop_gained in last exon may escape NMD)
+        if (is_last_exon && !is_single_exon && is_in_cds) {
             flags.push_back("END_TRUNC");
-            // Variants in last 50bp of last exon may escape NMD
+            is_hc = false;  // NMD escape - downgrade to LC
         }
 
         // Flag: Single exon gene
@@ -103,10 +119,11 @@ public:
             is_hc = false;
         }
 
-        // Flag: Non-canonical splice (would need actual consequence)
-        // This is typically done based on splice consequence type
-
-        // Flag: NAGNAG splice site (would need sequence context)
+        // Flag: Non-protein-coding
+        if (transcript->biotype != "protein_coding") {
+            flags.push_back("NON_CODING");
+            is_hc = false;
+        }
 
         // Set annotations
         if (is_hc) {
@@ -171,17 +188,18 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         if (!transcript) return;
+        if (!transcript->is_coding()) return;
 
         (void)chrom;
         (void)ref;
         (void)alt;
 
-        // NMD prediction based on 50bp rule
+        // NMD prediction based on 50bp rule (in CDS coordinates)
         // A premature termination codon (PTC) triggers NMD if:
-        // 1. It is >50-55bp upstream of the last exon-exon junction
+        // 1. It is >50-55bp upstream of the last exon-exon junction IN CDS COORDINATES
         // 2. The gene has more than one exon
 
         // Single exon genes don't undergo NMD
@@ -191,41 +209,76 @@ public:
             return;
         }
 
-        // Find the last exon-exon junction
-        int last_junction = 0;
-        if (transcript->strand == '+') {
-            // For + strand, junction is at start of last exon
-            if (transcript->exons.size() >= 2) {
-                last_junction = transcript->exons.back().start;
-            }
-        } else {
-            // For - strand, junction is at end of first exon (on - strand)
-            if (transcript->exons.size() >= 2) {
-                last_junction = transcript->exons.front().end;
-            }
+        // Calculate CDS position of the variant
+        int variant_cds_pos = calculate_cds_pos(pos, *transcript);
+        if (variant_cds_pos <= 0) {
+            annotations["nmd:susceptible"] = "false";
+            annotations["nmd:reason"] = "not_in_cds";
+            return;
         }
 
-        // Calculate distance from variant to last junction
-        int distance = 0;
+        // Calculate CDS position of the last exon-exon junction
+        // The last junction is at the start of the last exon (+ strand)
+        // or end of the first exon (- strand).
+        // In CDS terms, this is the CDS position where the last exon begins.
+        int junction_genomic = 0;
         if (transcript->strand == '+') {
-            distance = last_junction - pos;
+            junction_genomic = transcript->exons.back().start;
         } else {
-            distance = pos - last_junction;
+            junction_genomic = transcript->exons.front().end;
         }
 
-        // Apply 50bp rule
-        bool susceptible = (distance > 50);
+        int junction_cds_pos = calculate_cds_pos(junction_genomic, *transcript);
+
+        // If the last exon-exon junction is not in CDS (last exon is entirely UTR),
+        // then all CDS is upstream of the junction - variant is effectively in last coding exon
+        if (junction_cds_pos <= 0) {
+            annotations["nmd:susceptible"] = "false";
+            annotations["nmd:reason"] = "last_junction_in_utr";
+            annotations["nmd:distance_to_junction"] = "0";
+            return;
+        }
+
+        // Distance in CDS coordinates (how far PTC is upstream of last junction)
+        int cds_distance = junction_cds_pos - variant_cds_pos;
+
+        // Apply 50bp rule in CDS coordinates
+        bool susceptible = (cds_distance > 50);
 
         annotations["nmd:susceptible"] = susceptible ? "true" : "false";
-        annotations["nmd:distance_to_junction"] = std::to_string(distance);
+        annotations["nmd:distance_to_junction"] = std::to_string(cds_distance);
 
         if (susceptible) {
             annotations["nmd:reason"] = "ptc_upstream_of_last_junction";
-        } else if (distance <= 0) {
+        } else if (cds_distance <= 0) {
             annotations["nmd:reason"] = "in_last_exon";
         } else {
             annotations["nmd:reason"] = "within_50bp_of_junction";
         }
+    }
+
+    // Calculate CDS position from genomic position using transcript CDS regions
+    static int calculate_cds_pos(int genomic_pos, const Transcript& transcript) {
+        int cds_pos = 0;
+        if (transcript.strand == '+') {
+            for (const auto& cds : transcript.cds_regions) {
+                if (genomic_pos >= cds.start && genomic_pos <= cds.end) {
+                    return cds_pos + (genomic_pos - cds.start + 1);
+                }
+                cds_pos += cds.end - cds.start + 1;
+            }
+        } else {
+            // For minus strand, iterate CDS regions in reverse
+            std::vector<CDS> sorted_cds(transcript.cds_regions.rbegin(),
+                                        transcript.cds_regions.rend());
+            for (const auto& cds : sorted_cds) {
+                if (genomic_pos >= cds.start && genomic_pos <= cds.end) {
+                    return cds_pos + (cds.end - genomic_pos + 1);
+                }
+                cds_pos += cds.end - cds.start + 1;
+            }
+        }
+        return 0; // Not in CDS
     }
 
     std::vector<std::string> get_fields() const override {
@@ -259,7 +312,7 @@ public:
     bool is_ready() const override { return loaded_; }
 
     void initialize() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (loaded_) return;
 
         log(LogLevel::INFO, "Loading LoFtool scores from: " + path_);
@@ -299,7 +352,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
         if (!transcript) return;

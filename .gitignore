@@ -45,3 +45,6 @@ data/
 
 # Claude
 .claude/
+
+# Clangd cache
+.cache/

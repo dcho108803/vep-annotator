@@ -35,7 +35,7 @@ public:
     bool is_ready() const override { return reader_ != nullptr && reader_->is_valid(); }
 
     void initialize() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (reader_) return;
 
         log(LogLevel::INFO, "Loading SpliceAI from: " + path_);
@@ -59,7 +59,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
         if (!reader_) return;
@@ -120,13 +120,13 @@ public:
 
     bool requires_allele_match() const override { return true; }
 
-    std::map<std::string, std::string> query(
+    std::unordered_map<std::string, std::string> query(
         const std::string& chrom,
         int pos,
         const std::string& ref,
         const std::string& alt
     ) const override {
-        std::map<std::string, std::string> result;
+        std::unordered_map<std::string, std::string> result;
 
         if (!reader_) return result;
 
@@ -138,11 +138,30 @@ public:
 
             if (ref_it == record.end() || alt_it == record.end()) continue;
             if (ref_it->second != ref) continue;
-            if (alt_it->second.find(alt) == std::string::npos) continue;
+
+            // Find exact ALT match by splitting comma-delimited alts
+            int alt_index = -1;
+            {
+                std::istringstream iss(alt_it->second);
+                std::string a;
+                int idx = 0;
+                while (std::getline(iss, a, ',')) {
+                    if (a == alt) {
+                        alt_index = idx;
+                        break;
+                    }
+                    idx++;
+                }
+            }
+            if (alt_index < 0) continue;
 
             auto info_it = record.find("INFO");
             if (info_it != record.end()) {
-                parse_spliceai_info(info_it->second, 0, result);
+                std::unordered_map<std::string, std::string> tmp;
+                parse_spliceai_info(info_it->second, alt_index, tmp);
+                for (auto& kv : tmp) {
+                    result[kv.first] = std::move(kv.second);
+                }
                 break;
             }
         }
@@ -168,7 +187,7 @@ private:
     std::unique_ptr<TabixTSVReader> reader_;
 
     void parse_spliceai_info(const std::string& info, int alt_index,
-                             std::map<std::string, std::string>& annotations) const {
+                             std::unordered_map<std::string, std::string>& annotations) const {
         // SpliceAI INFO format: SpliceAI=ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL
         // May have multiple alleles separated by ','
 
@@ -194,7 +213,7 @@ private:
         }
 
         if (alt_index >= static_cast<int>(allele_values.size())) {
-            alt_index = 0;
+            return;  // No matching allele data available
         }
 
         // Parse the value for this allele
@@ -237,10 +256,18 @@ private:
             if (fields[8] != ".") annotations["spliceai:DP_DG"] = fields[8];
             if (fields[9] != ".") annotations["spliceai:DP_DL"] = fields[9];
 
-            // Calculate max delta score
+            // Calculate max delta score - use original string to preserve formatting
             double max_ds = std::max({ds_ag, ds_al, ds_dg, ds_dl});
             if (max_ds > 0) {
-                annotations["spliceai:max_DS"] = std::to_string(max_ds);
+                // Find which field string corresponds to max value
+                std::string max_str;
+                if (max_ds == ds_ag && fields[2] != ".") max_str = fields[2];
+                else if (max_ds == ds_al && fields[3] != ".") max_str = fields[3];
+                else if (max_ds == ds_dg && fields[4] != ".") max_str = fields[4];
+                else if (max_ds == ds_dl && fields[5] != ".") max_str = fields[5];
+                if (!max_str.empty()) {
+                    annotations["spliceai:max_DS"] = max_str;
+                }
             }
         }
     }

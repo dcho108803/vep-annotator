@@ -15,6 +15,7 @@
 #include <htslib/tbx.h>
 #include <htslib/hts.h>
 #include <htslib/kstring.h>
+#include <htslib/kseq.h>
 #endif
 
 #ifdef HAVE_BIGWIG
@@ -31,18 +32,19 @@ namespace vep {
 
 std::vector<std::string> split_line(const std::string& line, char delim) {
     std::vector<std::string> result;
-    std::istringstream iss(line);
-    std::string field;
-
-    while (std::getline(iss, field, delim)) {
-        result.push_back(field);
+    size_t start = 0;
+    size_t pos = line.find(delim);
+    while (pos != std::string::npos) {
+        result.emplace_back(line, start, pos - start);
+        start = pos + 1;
+        pos = line.find(delim, start);
     }
-
+    result.emplace_back(line, start);
     return result;
 }
 
-std::map<std::string, std::string> parse_gff3_attributes(const std::string& attrs) {
-    std::map<std::string, std::string> result;
+std::unordered_map<std::string, std::string> parse_gff3_attributes(const std::string& attrs) {
+    std::unordered_map<std::string, std::string> result;
 
     auto fields = split_line(attrs, ';');
     for (const auto& field : fields) {
@@ -61,12 +63,19 @@ std::string url_decode(const std::string& str) {
     std::string result;
     result.reserve(str.size());
 
+    auto hex_val = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+
     for (size_t i = 0; i < str.size(); ++i) {
         if (str[i] == '%' && i + 2 < str.size()) {
-            int val;
-            std::istringstream iss(str.substr(i + 1, 2));
-            if (iss >> std::hex >> val) {
-                result += static_cast<char>(val);
+            int hi = hex_val(str[i + 1]);
+            int lo = hex_val(str[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                result += static_cast<char>(hi * 16 + lo);
                 i += 2;
                 continue;
             }
@@ -542,8 +551,8 @@ GFF3Database::GFF3Database(
             return;
         }
 
-        static char buffer[65536];
-        read_line = [&gz](std::string& line) -> bool {
+        char buffer[65536];
+        read_line = [&gz, &buffer](std::string& line) -> bool {
             if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
@@ -587,15 +596,17 @@ GFF3Database::GFF3Database(
         feat.seqid = normalize_chrom(fields[0]);
         feat.source = fields[1];
         feat.type = type;
-        feat.start = std::stoi(fields[3]);
-        feat.end = std::stoi(fields[4]);
+        try { feat.start = std::stoi(fields[3]); }
+        catch (...) { continue; }
+        try { feat.end = std::stoi(fields[4]); }
+        catch (...) { continue; }
 
         if (fields[5] != ".") {
             try { feat.score = std::stod(fields[5]); }
             catch (...) {}
         }
 
-        feat.strand = fields[6][0];
+        feat.strand = fields[6].empty() ? '.' : fields[6][0];
 
         if (fields[7] != ".") {
             try { feat.phase = std::stoi(fields[7]); }
@@ -871,7 +882,7 @@ void AnnotationSourceManager::annotate_all(
     const std::string& ref,
     const std::string& alt,
     const Transcript* transcript,
-    std::map<std::string, std::string>& annotations
+    std::unordered_map<std::string, std::string>& annotations
 ) {
     std::shared_lock<std::shared_mutex> lock(mutex_);
 
@@ -899,9 +910,8 @@ std::vector<std::pair<std::string, std::string>> AnnotationSourceManager::get_al
     std::shared_lock<std::shared_mutex> lock(mutex_);
 
     for (const auto& source : sources_) {
-        std::string name = source->name();
         for (const auto& field : source->get_fields()) {
-            result.emplace_back(name + ":" + field, source->type());
+            result.emplace_back(field, source->type());
         }
     }
 

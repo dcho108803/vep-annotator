@@ -32,7 +32,7 @@ public:
     bool is_ready() const override { return reader_ != nullptr && reader_->is_valid(); }
 
     void initialize() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (reader_) return;
 
         log(LogLevel::INFO, "Loading dbscSNV from: " + path_);
@@ -54,7 +54,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
         if (!reader_) return;
@@ -117,13 +117,13 @@ public:
 
     bool requires_allele_match() const override { return true; }
 
-    std::map<std::string, std::string> query(
+    std::unordered_map<std::string, std::string> query(
         const std::string& chrom,
         int pos,
         const std::string& ref,
         const std::string& alt
     ) const override {
-        std::map<std::string, std::string> result;
+        std::unordered_map<std::string, std::string> result;
 
         if (!reader_) return result;
 

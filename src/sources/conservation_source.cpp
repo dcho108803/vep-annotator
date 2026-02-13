@@ -38,7 +38,7 @@ public:
     }
 
     void initialize() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (reader_) return;
 
         log(LogLevel::INFO, "Loading " + source_name_ + " from: " + path_);
@@ -61,7 +61,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
         if (!reader_) return;
@@ -78,7 +78,7 @@ public:
         } else {
             // For indels, get mean score across affected region
             int start = pos;
-            int end = pos + static_cast<int>(std::max(ref.length(), alt.length())) - 1;
+            int end = pos + static_cast<int>(ref.length()) - 1;
 
             auto mean = reader_->get_mean(chrom, start, end);
             if (mean.has_value()) {
@@ -119,10 +119,9 @@ protected:
 
     static std::string format_score(double score) {
         if (std::isnan(score)) return ".";
-        std::ostringstream oss;
-        oss.precision(4);
-        oss << std::fixed << score;
-        return oss.str();
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.4f", score);
+        return buf;
     }
 };
 
@@ -145,7 +144,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         // Call parent implementation
         BigWigScoreSource::annotate(chrom, pos, ref, alt, transcript, annotations);
@@ -197,7 +196,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         BigWigScoreSource::annotate(chrom, pos, ref, alt, transcript, annotations);
 
@@ -248,7 +247,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         BigWigScoreSource::annotate(chrom, pos, ref, alt, transcript, annotations);
 

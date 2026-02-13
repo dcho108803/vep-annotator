@@ -208,6 +208,31 @@ inline std::set<std::string> get_dbnsfp_field_names(const std::vector<DbNSFPFiel
 }
 
 /**
+ * Common field presets
+ */
+inline std::vector<DbNSFPField> get_dbnsfp_preset(const std::string& preset) {
+    if (preset == "essential") {
+        // Most commonly used scores
+        return {
+            DBNSFP_PATHOGENICITY_FIELDS[0],  // SIFT_score
+            DBNSFP_PATHOGENICITY_FIELDS[4],  // Polyphen2_HDIV_score
+            DBNSFP_PATHOGENICITY_FIELDS[9],  // CADD_phred
+            DBNSFP_PATHOGENICITY_FIELDS[10], // REVEL_score
+            DBNSFP_PATHOGENICITY_FIELDS[11], // AlphaMissense_score
+        };
+    } else if (preset == "pathogenicity") {
+        return DBNSFP_PATHOGENICITY_FIELDS;
+    } else if (preset == "conservation") {
+        return DBNSFP_CONSERVATION_FIELDS;
+    } else if (preset == "frequency") {
+        return DBNSFP_FREQUENCY_FIELDS;
+    } else if (preset == "clinical") {
+        return DBNSFP_CLINICAL_FIELDS;
+    }
+    return get_all_dbnsfp_fields();
+}
+
+/**
  * Parse field specification string (comma-separated)
  * Returns requested fields, or all fields if "all" is specified
  */
@@ -216,6 +241,13 @@ inline std::vector<DbNSFPField> parse_dbnsfp_fields(const std::string& field_spe
 
     if (field_spec.empty() || field_spec == "all") {
         return get_all_dbnsfp_fields();
+    }
+
+    // Check for preset names
+    if (field_spec == "essential" || field_spec == "pathogenicity" ||
+        field_spec == "conservation" || field_spec == "frequency" ||
+        field_spec == "clinical" || field_spec == "splicing") {
+        return get_dbnsfp_preset(field_spec);
     }
 
     // Build lookup map
@@ -242,31 +274,6 @@ inline std::vector<DbNSFPField> parse_dbnsfp_fields(const std::string& field_spe
     }
 
     return result;
-}
-
-/**
- * Common field presets
- */
-inline std::vector<DbNSFPField> get_dbnsfp_preset(const std::string& preset) {
-    if (preset == "essential") {
-        // Most commonly used scores
-        return {
-            DBNSFP_PATHOGENICITY_FIELDS[0],  // SIFT_score
-            DBNSFP_PATHOGENICITY_FIELDS[4],  // Polyphen2_HDIV_score
-            DBNSFP_PATHOGENICITY_FIELDS[9],  // CADD_phred
-            DBNSFP_PATHOGENICITY_FIELDS[10], // REVEL_score
-            DBNSFP_PATHOGENICITY_FIELDS[11], // AlphaMissense_score
-        };
-    } else if (preset == "pathogenicity") {
-        return DBNSFP_PATHOGENICITY_FIELDS;
-    } else if (preset == "conservation") {
-        return DBNSFP_CONSERVATION_FIELDS;
-    } else if (preset == "frequency") {
-        return DBNSFP_FREQUENCY_FIELDS;
-    } else if (preset == "clinical") {
-        return DBNSFP_CLINICAL_FIELDS;
-    }
-    return get_all_dbnsfp_fields();
 }
 
 } // namespace vep

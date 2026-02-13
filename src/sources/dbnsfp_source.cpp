@@ -42,7 +42,7 @@ public:
     bool is_ready() const override { return reader_ != nullptr && reader_->is_valid(); }
 
     void initialize() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (reader_) return;
 
         log(LogLevel::INFO, "Loading dbNSFP from: " + path_);
@@ -83,7 +83,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
         if (!reader_) return;
@@ -165,13 +165,13 @@ public:
 
     bool requires_allele_match() const override { return true; }
 
-    std::map<std::string, std::string> query(
+    std::unordered_map<std::string, std::string> query(
         const std::string& chrom,
         int pos,
         const std::string& ref,
         const std::string& alt
     ) const override {
-        std::map<std::string, std::string> result;
+        std::unordered_map<std::string, std::string> result;
 
         if (!reader_) return result;
 
@@ -182,12 +182,46 @@ public:
             if (ref_it != record.end() && ref_it->second != ref) continue;
 
             auto alt_it = record.find("alt");
-            if (alt_it != record.end() && alt_it->second.find(alt) != std::string::npos) {
-                // Found match - copy all requested fields
+            if (alt_it != record.end()) {
+                // Properly match alt allele using semicolon-split (like annotate())
+                std::string alts = alt_it->second;
+                bool found_alt = false;
+                size_t alt_index = 0;
+
+                std::istringstream aiss(alts);
+                std::string single_alt;
+                size_t aidx = 0;
+                while (std::getline(aiss, single_alt, ';')) {
+                    if (single_alt == alt) {
+                        found_alt = true;
+                        alt_index = aidx;
+                        break;
+                    }
+                    ++aidx;
+                }
+
+                if (!found_alt) continue;
+
+                // Found match - copy all requested fields with alt-index extraction
                 for (const auto& field : requested_fields_) {
                     auto col_it = record.find(field.column);
                     if (col_it != record.end() && col_it->second != "." && !col_it->second.empty()) {
-                        result["dbnsfp:" + field.name] = col_it->second;
+                        std::string value = col_it->second;
+                        // Handle multi-value fields (separated by ';')
+                        if (value.find(';') != std::string::npos) {
+                            std::vector<std::string> values;
+                            std::istringstream vss(value);
+                            std::string v;
+                            while (std::getline(vss, v, ';')) {
+                                values.push_back(v);
+                            }
+                            if (alt_index < values.size()) {
+                                value = values[alt_index];
+                            }
+                        }
+                        if (value != "." && !value.empty()) {
+                            result["dbnsfp:" + field.name] = value;
+                        }
                     }
                 }
                 break;

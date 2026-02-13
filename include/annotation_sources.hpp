@@ -10,8 +10,12 @@
 #include "annotation_source.hpp"
 #include <string>
 #include <memory>
+#include <set>
 
 namespace vep {
+
+// Forward declarations
+class ReferenceGenome;
 
 // ============================================================================
 // Pathogenicity Sources
@@ -41,6 +45,11 @@ std::shared_ptr<AnnotationSource> create_spliceai_source(const std::string& path
  * Create MaxEntScan annotation source (algorithmic, no data file needed)
  */
 std::shared_ptr<AnnotationSource> create_maxentscan_source();
+
+/**
+ * Create MaxEntScan annotation source with reference genome for actual scoring
+ */
+std::shared_ptr<AnnotationSource> create_maxentscan_source(const ReferenceGenome* ref);
 
 /**
  * Create dbscSNV annotation source

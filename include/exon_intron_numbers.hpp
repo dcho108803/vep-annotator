@@ -81,19 +81,13 @@ inline ExonIntronInfo get_exon_intron_number(
     info.total_exons = num_exons;
     info.total_introns = num_exons > 1 ? num_exons - 1 : 0;
 
-    // Create sorted exon list by position
-    std::vector<std::pair<int, int> > exons;  // (start, end) pairs
-    for (int i = 0; i < num_exons; ++i) {
-        exons.push_back(std::make_pair(exon_starts[i], exon_ends[i]));
-    }
-
-    // Sort by start position
-    std::sort(exons.begin(), exons.end());
+    // Exons are already sorted by start position from GTF loading;
+    // use the input arrays directly without copying or sorting.
 
     // Check each exon
     for (int i = 0; i < num_exons; ++i) {
-        int start = exons[i].first;
-        int end = exons[i].second;
+        int start = exon_starts[i];
+        int end = exon_ends[i];
 
         if (position >= start && position <= end) {
             // Position is in this exon
@@ -115,7 +109,7 @@ inline ExonIntronInfo get_exon_intron_number(
         // Check if in intron (between this exon and next)
         if (i < num_exons - 1) {
             int intron_start = end + 1;
-            int intron_end = exons[i + 1].first - 1;
+            int intron_end = exon_starts[i + 1] - 1;
 
             if (position >= intron_start && position <= intron_end) {
                 // Position is in this intron
@@ -204,8 +198,8 @@ inline ExonIntronInfo get_cds_exon_number(
         return info;
     }
 
-    // Sort by position
-    std::sort(coding_exons.begin(), coding_exons.end());
+    // coding_exons are already in sorted order because exon_starts/exon_ends
+    // are sorted by start position from GTF loading.
 
     info.total_exons = static_cast<int>(coding_exons.size());
     info.total_introns = info.total_exons > 1 ? info.total_exons - 1 : 0;
@@ -231,7 +225,7 @@ inline ExonIntronInfo get_cds_exon_number(
         }
 
         // Check intron between coding exons
-        if (i < coding_exons.size() - 1) {
+        if (i + 1 < coding_exons.size()) {
             int intron_start = end + 1;
             int intron_end = coding_exons[i + 1].first - 1;
 
@@ -312,8 +306,8 @@ inline int calculate_cds_position(
         return -1;
     }
 
-    // Sort by position
-    std::sort(coding_segments.begin(), coding_segments.end());
+    // coding_segments are already in sorted order because exon_starts/exon_ends
+    // are sorted by start position from GTF loading.
 
     if (strand == '-') {
         // Reverse for minus strand

@@ -21,8 +21,8 @@ namespace vep {
 class RegulatorySource : public IntervalAnnotationSource {
 public:
     RegulatorySource(const std::string& path,
-                     const std::set<std::string>& feature_types = {})
-        : path_(path), feature_types_(feature_types) {}
+                     const std::set<std::string>& cell_types = {})
+        : path_(path), cell_types_(cell_types) {}
 
     std::string name() const override { return "regulatory"; }
     std::string type() const override { return "regulatory"; }
@@ -33,12 +33,14 @@ public:
     bool is_ready() const override { return db_ != nullptr; }
 
     void initialize() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (db_) return;
 
         log(LogLevel::INFO, "Loading regulatory annotations from: " + path_);
 
-        db_ = std::make_unique<GFF3Database>(path_, feature_types_);
+        // Load ALL regulatory features (no type filtering)
+        // Cell type filtering is done at query time via attributes
+        db_ = std::make_unique<GFF3Database>(path_);
 
         log(LogLevel::INFO, "Regulatory features loaded: " +
                            std::to_string(db_->feature_count()));
@@ -50,7 +52,7 @@ public:
         const std::string& ref,
         const std::string& alt,
         const Transcript* transcript,
-        std::map<std::string, std::string>& annotations
+        std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
         if (!db_) return;
@@ -59,18 +61,36 @@ public:
 
         // Query region based on variant extent
         int start = pos;
-        int end = pos + static_cast<int>(std::max(ref.length(), alt.length())) - 1;
+        int end = pos + static_cast<int>(ref.length()) - 1;
 
         auto features = db_->query(chrom, start, end);
 
         if (features.empty()) return;
 
-        // Collect feature types and IDs
+        // Collect feature types and IDs, optionally filtering by cell type
         std::set<std::string> types;
         std::vector<std::string> ids;
         std::vector<std::string> names;
 
         for (const auto* feature : features) {
+            // If cell types are specified, filter by cell_type attribute
+            if (!cell_types_.empty()) {
+                auto ct_it = feature->attributes.find("cell_type");
+                if (ct_it != feature->attributes.end()) {
+                    bool match = false;
+                    for (const auto& ct : cell_types_) {
+                        if (ct_it->second.find(ct) != std::string::npos) {
+                            match = true;
+                            break;
+                        }
+                    }
+                    if (!match) continue;
+                } else {
+                    // Feature has no cell_type attribute - skip when filtering by cell type
+                    continue;
+                }
+            }
+
             types.insert(feature->type);
             if (!feature->id.empty()) {
                 ids.push_back(feature->id);
@@ -193,7 +213,7 @@ public:
 
 private:
     std::string path_;
-    std::set<std::string> feature_types_;
+    std::set<std::string> cell_types_;
     std::unique_ptr<GFF3Database> db_;
 };
 
@@ -202,9 +222,9 @@ private:
  */
 std::shared_ptr<AnnotationSource> create_regulatory_source(
     const std::string& path,
-    const std::set<std::string>& feature_types
+    const std::set<std::string>& cell_types
 ) {
-    return std::make_shared<RegulatorySource>(path, feature_types);
+    return std::make_shared<RegulatorySource>(path, cell_types);
 }
 
 } // namespace vep

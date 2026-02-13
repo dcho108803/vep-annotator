@@ -216,6 +216,7 @@ if(BUILD_TESTS)
         tests/test_consequences.cpp
         tests/test_codon_table.cpp
         tests/test_hgvs.cpp
+        tests/test_spliceai.cpp
     )
     target_link_libraries(vep_tests
         PRIVATE

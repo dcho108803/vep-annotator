@@ -83,6 +83,9 @@ void print_usage(const char* program_name) {
               << "                          Presets: essential, pathogenicity, conservation, all\n\n"
               << "Splice Predictions:\n"
               << "  --spliceai FILE         SpliceAI VCF file (tabix-indexed)\n"
+              << "  --spliceai-snv FILE     SpliceAI SNV VCF file (tabix-indexed)\n"
+              << "  --spliceai-indel FILE   SpliceAI indel VCF file (tabix-indexed)\n"
+              << "  --spliceai-cutoff VAL   SpliceAI delta score cutoff (adds PASS/FAIL)\n"
               << "  --maxentscan            Enable MaxEntScan splice site scoring\n"
               << "  --dbscsnv FILE          dbscSNV file (tabix-indexed)\n\n"
               << "Conservation Scores:\n"
@@ -653,6 +656,9 @@ int main(int argc, char* argv[]) {
 
     // Splice predictions
     std::string spliceai_path;
+    std::string spliceai_snv_path;
+    std::string spliceai_indel_path;
+    double spliceai_cutoff = -1.0;
     bool use_maxentscan = false;
     std::string dbscsnv_path;
 
@@ -949,6 +955,12 @@ int main(int argc, char* argv[]) {
         // Splice predictions
         else if (arg == "--spliceai" && i + 1 < argc) {
             spliceai_path = argv[++i];
+        } else if (arg == "--spliceai-snv" && i + 1 < argc) {
+            spliceai_snv_path = argv[++i];
+        } else if (arg == "--spliceai-indel" && i + 1 < argc) {
+            spliceai_indel_path = argv[++i];
+        } else if (arg == "--spliceai-cutoff" && i + 1 < argc) {
+            spliceai_cutoff = std::stod(argv[++i]);
         } else if (arg == "--maxentscan") {
             use_maxentscan = true;
         } else if (arg == "--dbscsnv" && i + 1 < argc) {
@@ -1568,8 +1580,9 @@ int main(int argc, char* argv[]) {
         }
 
         // Add splice prediction sources
-        if (!spliceai_path.empty()) {
-            auto spliceai_source = vep::create_spliceai_source(spliceai_path);
+        if (!spliceai_snv_path.empty() || !spliceai_indel_path.empty() || !spliceai_path.empty()) {
+            auto spliceai_source = vep::create_spliceai_source(
+                spliceai_snv_path, spliceai_indel_path, spliceai_path, spliceai_cutoff);
             annotator.add_source(spliceai_source);
         }
         if (use_maxentscan) {

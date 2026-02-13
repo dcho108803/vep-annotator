@@ -36,10 +36,24 @@ std::shared_ptr<AnnotationSource> create_dbnsfp_source(
 // ============================================================================
 
 /**
- * Create SpliceAI annotation source
+ * Create SpliceAI annotation source (unified file)
  * @param path Path to SpliceAI VCF file (.vcf.gz + .tbi)
  */
 std::shared_ptr<AnnotationSource> create_spliceai_source(const std::string& path);
+
+/**
+ * Create SpliceAI annotation source with separate SNV/indel files
+ * @param snv_path Path to SpliceAI SNV VCF file, or empty
+ * @param indel_path Path to SpliceAI indel VCF file, or empty
+ * @param unified_path Path to unified SpliceAI VCF file, or empty
+ * @param cutoff Score cutoff for PASS/FAIL (-1.0 = disabled)
+ */
+std::shared_ptr<AnnotationSource> create_spliceai_source(
+    const std::string& snv_path,
+    const std::string& indel_path,
+    const std::string& unified_path,
+    double cutoff = -1.0
+);
 
 /**
  * Create MaxEntScan annotation source (algorithmic, no data file needed)

@@ -10,6 +10,7 @@
 #include "vep_annotator.hpp"
 #include <sstream>
 #include <algorithm>
+#include <cstdio>
 
 namespace vep {
 
@@ -95,7 +96,8 @@ public:
 
             double max_score = std::max(ada, rf);
             if (max_score > 0) {
-                annotations["dbscsnv:max_score"] = std::to_string(max_score);
+                char buf[32]; std::snprintf(buf, sizeof(buf), "%.4f", max_score);
+                annotations["dbscsnv:max_score"] = buf;
                 std::string pred = interpret_score(max_score);
                 if (!pred.empty()) {
                     annotations["dbscsnv:prediction"] = pred;

@@ -764,6 +764,7 @@ private:
         const std::string& ref, const std::string& alt,
         const Transcript& transcript,
         const std::string& cached_cds,
+        int cds_pos,
         VariantAnnotation& ann);
 
     /**

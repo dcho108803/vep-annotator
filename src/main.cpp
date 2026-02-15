@@ -791,8 +791,14 @@ int main(int argc, char* argv[]) {
             fasta_path = argv[++i];
         } else if ((arg == "-v" || arg == "--variant") && i + 1 < argc) {
             variant = argv[++i];
-        } else if (arg == "--vcf" && i + 1 < argc) {
-            vcf_path = argv[++i];
+        } else if (arg == "--vcf") {
+            // Perl VEP: --vcf (no arg) means "output in VCF format"
+            // C++ legacy: --vcf FILE means "input VCF file" (backward compat)
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                vcf_path = argv[++i];
+            } else {
+                output_format = vep::OutputFormat::VCF;
+            }
         } else if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             output_path = argv[++i];
         } else if (arg == "--debug") {
@@ -911,23 +917,58 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
         }
-        // Perl VEP --custom format: file,short_name,type,overlap,0,field1,field2,...
+        // Perl VEP --custom format:
+        // Positional: file,short_name,type,overlap,0,field1,field2,...
+        // Key=value (VEP 110+): file=X,short_name=Y,format=vcf,type=exact,coords=0,fields=A%B%C
         else if (arg == "--custom" && i + 1 < argc) {
             std::string custom_str = argv[++i];
             CustomSource cs;
-            std::istringstream css(custom_str);
-            std::string token;
-            int field_idx = 0;
-            while (std::getline(css, token, ',')) {
-                switch (field_idx) {
-                    case 0: cs.file_path = token; break;
-                    case 1: cs.short_name = token; break;
-                    case 2: cs.type = token; break;
-                    case 3: cs.overlap = token; break;
-                    case 4: cs.coords_0based = (token == "1"); break;
-                    default: cs.fields.push_back(token); break;
+            // Detect key=value format: check if first comma-separated token contains '='
+            bool is_key_value = false;
+            {
+                auto first_comma = custom_str.find(',');
+                std::string first_token = (first_comma != std::string::npos) ? custom_str.substr(0, first_comma) : custom_str;
+                is_key_value = (first_token.find('=') != std::string::npos);
+            }
+            if (is_key_value) {
+                // Key=value format: file=X,short_name=Y,format=vcf,type=exact,coords=0,fields=A%B%C
+                std::istringstream css(custom_str);
+                std::string token;
+                while (std::getline(css, token, ',')) {
+                    auto eq = token.find('=');
+                    if (eq == std::string::npos) continue;
+                    std::string key = token.substr(0, eq);
+                    std::string val = token.substr(eq + 1);
+                    if (key == "file") cs.file_path = val;
+                    else if (key == "short_name") cs.short_name = val;
+                    else if (key == "format") cs.type = val;
+                    else if (key == "type") cs.overlap = val;
+                    else if (key == "coords") cs.coords_0based = (val == "1");
+                    else if (key == "fields") {
+                        // Fields are separated by % in key=value format
+                        std::istringstream fss(val);
+                        std::string field;
+                        while (std::getline(fss, field, '%')) {
+                            if (!field.empty()) cs.fields.push_back(field);
+                        }
+                    }
                 }
-                field_idx++;
+            } else {
+                // Positional format: file,short_name,type,overlap,coords,field1,field2,...
+                std::istringstream css(custom_str);
+                std::string token;
+                int field_idx = 0;
+                while (std::getline(css, token, ',')) {
+                    switch (field_idx) {
+                        case 0: cs.file_path = token; break;
+                        case 1: cs.short_name = token; break;
+                        case 2: cs.type = token; break;
+                        case 3: cs.overlap = token; break;
+                        case 4: cs.coords_0based = (token == "1"); break;
+                        default: cs.fields.push_back(token); break;
+                    }
+                    field_idx++;
+                }
             }
             // Default short name from filename if not provided
             if (cs.short_name.empty() && !cs.file_path.empty()) {
@@ -960,7 +1001,8 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--spliceai-indel" && i + 1 < argc) {
             spliceai_indel_path = argv[++i];
         } else if (arg == "--spliceai-cutoff" && i + 1 < argc) {
-            spliceai_cutoff = std::stod(argv[++i]);
+            try { spliceai_cutoff = std::stod(argv[++i]); }
+            catch (...) { std::cerr << "Warning: invalid --spliceai-cutoff value, ignored\n"; }
         } else if (arg == "--maxentscan") {
             use_maxentscan = true;
         } else if (arg == "--dbscsnv" && i + 1 < argc) {
@@ -1003,11 +1045,36 @@ int main(int argc, char* argv[]) {
         // Plugins
         else if (arg == "--plugin" && i + 1 < argc) {
             std::string plugin_arg = argv[++i];
-            size_t colon = plugin_arg.find(':');
-            if (colon != std::string::npos) {
-                plugins.push_back(std::make_pair(plugin_arg.substr(0, colon), plugin_arg.substr(colon + 1)));
+            // Check for built-in plugin names with Perl VEP comma-separated format
+            // e.g., --plugin "SpliceAI,snv=/path/snv.vcf.gz,indel=/path/indel.vcf.gz"
+            auto first_comma = plugin_arg.find(',');
+            std::string plugin_name = (first_comma != std::string::npos) ? plugin_arg.substr(0, first_comma) : plugin_arg;
+            if (plugin_name == "SpliceAI") {
+                // Parse Perl VEP SpliceAI plugin format: SpliceAI,snv=FILE,indel=FILE[,cutoff=N]
+                if (first_comma != std::string::npos) {
+                    std::string params = plugin_arg.substr(first_comma + 1);
+                    std::istringstream pss(params);
+                    std::string param;
+                    while (std::getline(pss, param, ',')) {
+                        auto eq = param.find('=');
+                        if (eq == std::string::npos) continue;
+                        std::string key = param.substr(0, eq);
+                        std::string val = param.substr(eq + 1);
+                        if (key == "snv") spliceai_snv_path = val;
+                        else if (key == "indel") spliceai_indel_path = val;
+                        else if (key == "cutoff") {
+                            try { spliceai_cutoff = std::stod(val); } catch (...) {}
+                        }
+                    }
+                }
             } else {
-                plugins.push_back(std::make_pair(plugin_arg, std::string("")));
+                // Generic plugin: try colon-separated format (path:config)
+                size_t colon = plugin_arg.find(':');
+                if (colon != std::string::npos) {
+                    plugins.push_back(std::make_pair(plugin_arg.substr(0, colon), plugin_arg.substr(colon + 1)));
+                } else {
+                    plugins.push_back(std::make_pair(plugin_arg, std::string("")));
+                }
             }
         } else if (arg == "--plugin-dir" && i + 1 < argc) {
             plugin_dirs.push_back(argv[++i]);

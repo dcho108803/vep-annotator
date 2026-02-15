@@ -123,11 +123,10 @@ public:
         std::vector<std::string> domain_names;
 
         for (const auto& d : domain_list) {
-            // If we have a valid protein position, filter by overlap
-            if (protein_pos > 0) {
-                if (protein_pos < d.aa_start || protein_pos > d.aa_end) {
-                    continue; // Variant doesn't overlap this domain
-                }
+            // Only report domains when we have a valid protein position
+            if (protein_pos <= 0) continue;
+            if (protein_pos < d.aa_start || protein_pos > d.aa_end) {
+                continue; // Variant doesn't overlap this domain
             }
             domain_ids.push_back(d.domain_id);
             if (!d.domain_name.empty()) {

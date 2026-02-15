@@ -896,7 +896,6 @@ private:
             bool first_d = true;
             // Check for pfam domains
             auto pfam_id_it = ann.custom_annotations.find("pfam:domain_id");
-            auto pfam_name_it = ann.custom_annotations.find("pfam:domain_name");
             if (pfam_id_it != ann.custom_annotations.end() && !pfam_id_it->second.empty()) {
                 has_domains = true;
                 domains << "{\"db\": \"Pfam\", \"name\": \"" << escape_json(pfam_id_it->second) << "\"}";
@@ -905,7 +904,6 @@ private:
             }
             // Check for interpro domains
             auto ip_id_it = ann.custom_annotations.find("interpro:domain_id");
-            auto ip_name_it = ann.custom_annotations.find("interpro:domain_name");
             if (ip_id_it != ann.custom_annotations.end() && !ip_id_it->second.empty()) {
                 has_domains = true;
                 if (!first_d) domains << ", ";
@@ -980,16 +978,15 @@ private:
             }
         }
 
-        // Perl VEP deletes feature_type from per-transcript JSON objects
-        // Remove trailing comma from last field written above
+        // Remove trailing comma from last field and close object
         {
             std::string s = json.str();
             if (s.size() >= 2 && s.back() == '\n' && s[s.size()-2] == ',') {
-                s.erase(s.size()-2, 1);
+                s.resize(s.size() - 2);
+                s += '\n';
             }
-            json.str("");
-            json.clear();
-            json << s;
+            json.str(std::move(s));
+            json.seekp(0, std::ios_base::end);
         }
         json << "      }";
     }

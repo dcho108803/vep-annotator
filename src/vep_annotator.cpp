@@ -1953,7 +1953,7 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
         const std::string cached_cds = build_cds_sequence(chrom, transcript);
         int cds_pos = calculate_cds_position(pos, transcript);
         if (cds_pos > 0) {
-            annotate_coding_region(chrom, pos, ref, alt, transcript, cached_cds, ann);
+            annotate_coding_region(chrom, pos, ref, alt, transcript, cached_cds, cds_pos, ann);
         } else {
             annotate_noncds_hgvsc(pos, ref, alt, transcript, ann);
         }
@@ -1973,9 +1973,10 @@ void VEPAnnotator::annotate_coding_region(
     const std::string& ref, const std::string& alt,
     const Transcript& transcript,
     const std::string& cached_cds,
+    int cds_pos,
     VariantAnnotation& ann) {
+    (void)pos; // cds_pos passed directly, pos retained for potential future use
 
-    int cds_pos = calculate_cds_position(pos, transcript);
     ann.cds_position = cds_pos;
     ann.protein_position = (cds_pos - 1) / 3 + 1;
 
@@ -2010,7 +2011,7 @@ void VEPAnnotator::annotate_coding_region(
                 int check_idx = is_cds_insertion ? shift_pos : (shift_pos + indel_len - 1);
                 if (check_idx >= cds_len) break;
                 if (std::toupper(cached_cds[check_idx]) == std::toupper(indel_bases[0])) {
-                    indel_bases = indel_bases.substr(1) + indel_bases[0];
+                    std::rotate(indel_bases.begin(), indel_bases.begin() + 1, indel_bases.end());
                     shift_pos++;
                 } else {
                     break;
@@ -2827,7 +2828,7 @@ std::pair<std::string, std::string> VEPAnnotator::get_affected_codons(
 
         if (transcript.strand == '+') {
             int cds_offset = cds_pos - 1; // 0-based position in CDS
-            if (cds_offset + ref_len > static_cast<int>(cds_seq.length())) {
+            if (cds_offset < 0 || cds_offset + ref_len > static_cast<int>(cds_seq.length())) {
                 return {ref_codon, ref_codon};
             }
             mut_cds = cds_seq.substr(0, cds_offset) + alt + cds_seq.substr(cds_offset + ref_len);
@@ -3313,7 +3314,7 @@ std::tuple<int, std::string, std::string> VEPAnnotator::right_normalize(
         char next_base = reference_->get_base(chrom, check_pos);
         if (static_cast<unsigned char>(std::toupper(next_base)) ==
             static_cast<unsigned char>(std::toupper(shifted_indel[0]))) {
-            shifted_indel = shifted_indel.substr(1) + shifted_indel[0];
+            std::rotate(shifted_indel.begin(), shifted_indel.begin() + 1, shifted_indel.end());
             shifted_pos++;
         } else {
             break;

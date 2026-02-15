@@ -13,6 +13,7 @@
 #include <sstream>
 #include <fstream>
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 
 namespace vep {
@@ -146,7 +147,8 @@ public:
         if (!flags.empty()) {
             confidence -= flags.size() * 0.1;
         }
-        annotations["loftee:confidence"] = std::to_string(std::max(0.1, confidence));
+        char conf_buf[32]; std::snprintf(conf_buf, sizeof(conf_buf), "%.4f", std::max(0.1, confidence));
+        annotations["loftee:confidence"] = conf_buf;
     }
 
     std::vector<std::string> get_fields() const override {
@@ -370,7 +372,8 @@ public:
         }
 
         if (it != scores_.end()) {
-            annotations["loftool:score"] = std::to_string(it->second);
+            char score_buf[32]; std::snprintf(score_buf, sizeof(score_buf), "%.4f", it->second);
+            annotations["loftool:score"] = score_buf;
 
             // Interpret score (lower = less tolerant = more constrained)
             std::string interpretation = interpret_score(it->second);

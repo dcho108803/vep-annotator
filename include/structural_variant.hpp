@@ -185,16 +185,21 @@ inline std::vector<ConsequenceType> get_sv_consequences(
         bool affects_utr3 = false;
         bool affects_splice = false;
 
-        // Check each CDS region
+        // Check each CDS region for coding impact
         for (const auto& cds : transcript.cds_regions) {
             if (sv.overlaps(cds.start, cds.end)) {
                 affects_cds = true;
+            }
+        }
 
-                // Check for splice site disruption (2bp at boundaries)
-                if (sv.overlaps(cds.start - 2, cds.start + 1) ||
-                    sv.overlaps(cds.end - 1, cds.end + 2)) {
-                    affects_splice = true;
-                }
+        // Check splice sites at exon boundaries (not CDS boundaries)
+        for (size_t i = 0; i < transcript.exons.size(); ++i) {
+            const auto& exon = transcript.exons[i];
+            if (i > 0 && sv.overlaps(exon.start - 2, exon.start + 1)) {
+                affects_splice = true;
+            }
+            if (i + 1 < transcript.exons.size() && sv.overlaps(exon.end - 1, exon.end + 2)) {
+                affects_splice = true;
             }
         }
 
@@ -234,11 +239,16 @@ inline std::vector<ConsequenceType> get_sv_consequences(
                 consequences.push_back(ConsequenceType::SPLICE_REGION_VARIANT);
             }
             if (affects_cds) {
-                int inserted_bp = sv.length();
-                if (inserted_bp % 3 != 0) {
-                    consequences.push_back(ConsequenceType::FRAMESHIFT_VARIANT);
+                if (sv.sv_type == SVType::INS && sv.sv_len == 0) {
+                    // Unknown insertion length - can't determine frameshift/inframe
+                    consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
                 } else {
-                    consequences.push_back(ConsequenceType::INFRAME_INSERTION);
+                    int inserted_bp = sv.length();
+                    if (inserted_bp % 3 != 0) {
+                        consequences.push_back(ConsequenceType::FRAMESHIFT_VARIANT);
+                    } else {
+                        consequences.push_back(ConsequenceType::INFRAME_INSERTION);
+                    }
                 }
             }
         } else if (sv.sv_type == SVType::INV) {
@@ -358,9 +368,13 @@ inline StructuralVariant parse_sv_from_vcf(
         // Calculate from positions
         if (sv.sv_type == SVType::DEL) {
             sv.sv_len = -(sv.end - sv.start + 1);
-        } else if (sv.sv_type == SVType::INS || sv.sv_type == SVType::DUP) {
+        } else if (sv.sv_type == SVType::DUP) {
+            sv.sv_len = sv.end - sv.start + 1;
+        } else if (sv.sv_type == SVType::INS && sv.end != sv.start) {
+            // Only calculate INS length when END was explicitly provided
             sv.sv_len = sv.end - sv.start + 1;
         }
+        // For symbolic INS without SVLEN and without END, sv_len stays 0 (unknown)
     }
 
     // Get copy number for CNV

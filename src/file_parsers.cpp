@@ -769,6 +769,10 @@ std::unique_ptr<typename IntervalTree<T>::Node> IntervalTree<T>::build_tree(
     if (depth < 20) {  // Prevent deep recursion
         node->left = build_tree(left_indices, depth + 1);
         node->right = build_tree(right_indices, depth + 1);
+    } else {
+        // Flatten remaining intervals into current node to avoid silently dropping them
+        for (size_t idx : left_indices) node->overlapping.push_back(idx);
+        for (size_t idx : right_indices) node->overlapping.push_back(idx);
     }
 
     return node;
@@ -870,7 +874,7 @@ bool AnnotationSourceManager::is_enabled(const std::string& name) const {
 void AnnotationSourceManager::initialize_all() {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     for (auto& source : sources_) {
-        if (!source->is_ready() && is_enabled(source->name())) {
+        if (!source->is_ready() && disabled_.count(source->name()) == 0) {
             source->initialize();
         }
     }
@@ -887,7 +891,7 @@ void AnnotationSourceManager::annotate_all(
     std::shared_lock<std::shared_mutex> lock(mutex_);
 
     for (auto& source : sources_) {
-        if (!is_enabled(source->name())) continue;
+        if (disabled_.count(source->name()) != 0) continue;
 
         if (!source->is_ready()) {
             // Initialize on first use

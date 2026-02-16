@@ -272,7 +272,7 @@ private:
  */
 std::shared_ptr<AnnotationSource> create_dbnsfp_source(
     const std::string& path,
-    const std::string& fields = "essential"
+    const std::string& fields
 ) {
     return std::make_shared<DbNSFPSource>(path, fields);
 }

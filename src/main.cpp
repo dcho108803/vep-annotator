@@ -2550,6 +2550,8 @@ int main(int argc, char* argv[]) {
                                     switch (c) {
                                         case 'A': return 'T'; case 'T': return 'A';
                                         case 'C': return 'G'; case 'G': return 'C';
+                                        case 'a': return 't'; case 't': return 'a';
+                                        case 'c': return 'g'; case 'g': return 'c';
                                         default: return c;
                                     }
                                 };
@@ -2671,7 +2673,7 @@ int main(int argc, char* argv[]) {
                     was_minimised = true;
                 }
                 // Trim common suffix
-                while (sv_ref.size() > 1 && sv_alt.size() > 1 && sv_ref.back() == sv_alt.back()) {
+                while (!sv_ref.empty() && !sv_alt.empty() && sv_ref.back() == sv_alt.back()) {
                     sv_ref.pop_back();
                     sv_alt.pop_back();
                     was_minimised = true;

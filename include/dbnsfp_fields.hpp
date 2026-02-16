@@ -228,6 +228,8 @@ inline std::vector<DbNSFPField> get_dbnsfp_preset(const std::string& preset) {
         return DBNSFP_FREQUENCY_FIELDS;
     } else if (preset == "clinical") {
         return DBNSFP_CLINICAL_FIELDS;
+    } else if (preset == "splicing") {
+        return DBNSFP_SPLICE_FIELDS;
     }
     return get_all_dbnsfp_fields();
 }

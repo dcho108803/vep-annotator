@@ -122,7 +122,7 @@ public:
             annotations["regulatory:feature_id"] = oss.str();
         }
 
-        annotations["regulatory:count"] = std::to_string(features.size());
+        annotations["regulatory:count"] = std::to_string(ids.size());
 
         // Add specific feature type flags
         if (types.count("promoter") || types.count("Promoter")) {

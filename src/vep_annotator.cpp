@@ -1952,6 +1952,12 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
     if (transcript.is_coding()) {
         const std::string cached_cds = build_cds_sequence(chrom, transcript);
         int cds_pos = calculate_cds_position(pos, transcript);
+        // For minus strand with multi-base ref, calculate_cds_position(pos) returns the
+        // HIGHEST affected CDS position. Adjust to the FIRST (lowest) affected position.
+        if (transcript.strand == '-' && ref.length() > 1 && ref.length() != alt.length()) {
+            cds_pos = cds_pos - static_cast<int>(ref.length()) + 1;
+            if (cds_pos < 1) cds_pos = 1;
+        }
         if (cds_pos > 0) {
             annotate_coding_region(chrom, pos, ref, alt, transcript, cached_cds, cds_pos, ann);
         } else {
@@ -2352,7 +2358,7 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
     const Transcript& transcript) {
 
     std::vector<ConsequenceType> consequences;
-    int var_end = pos + static_cast<int>(ref.length()) - 1;
+    int var_end = pos + std::max(0, static_cast<int>(ref.length()) - 1);
 
     // Check if variant is in exon or intron
     bool in_exon = false;
@@ -2466,6 +2472,12 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
         }
     }
 
+    // Deduplicate splice consequences for variants spanning multiple exon boundaries
+    if (consequences.size() > 1) {
+        std::sort(consequences.begin(), consequences.end());
+        consequences.erase(std::unique(consequences.begin(), consequences.end()), consequences.end());
+    }
+
     // Non-coding transcript
     if (!transcript.is_coding()) {
         if (in_exon) {
@@ -2533,6 +2545,11 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
     // Coding region variant - determine specific consequence
     if (in_exon && pos <= transcript.cds_end && var_end >= transcript.cds_start) {
         int cds_pos = calculate_cds_position(pos, transcript);
+        // For minus strand with multi-base ref, adjust from last to first affected CDS position
+        if (transcript.strand == '-' && ref.length() > 1 && ref.length() != alt.length()) {
+            cds_pos = cds_pos - static_cast<int>(ref.length()) + 1;
+            if (cds_pos < 1) cds_pos = 1;
+        }
 
         if (cds_pos > 0) {
             // Check for incomplete terminal codon

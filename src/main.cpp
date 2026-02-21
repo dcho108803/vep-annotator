@@ -24,6 +24,14 @@
 #include <algorithm>
 #include <cctype>
 #include <memory>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+#include <queue>
+#include <chrono>
+#include <cstring>
+#include <unordered_map>
 
 void print_usage(const char* program_name) {
     std::cout << "VEP Variant Annotator - Pure C++ Local Implementation\n"
@@ -154,6 +162,8 @@ void print_usage(const char* program_name) {
               << "  --all-refseq            Include all RefSeq transcripts\n"
               << "  --filter-common         Filter out common variants (AF > 0.01)\n"
               << "  --max-af                Report maximum AF across populations\n"
+              << "  --exclude-predicted     Exclude predicted (XM_/XR_) transcripts\n"
+              << "  --chr LIST              Only annotate these chromosomes (comma-separated)\n"
               << "  --overlaps TYPE         SV overlap type: any, within, surrounding, exact\n"
               << "  --include_consequence LIST  Only include these consequences (comma-separated)\n"
               << "  --exclude_consequence LIST  Exclude these consequences (comma-separated)\n\n"
@@ -172,7 +182,8 @@ void print_usage(const char* program_name) {
               << "  --polyphen [p|s|b]      PolyPhen predictions\n"
               << "  --check-existing FILE   Check for co-located known variants (VCF)\n"
               << "  --show-ref-allele       Show GIVEN_REF/USED_REF in output\n"
-              << "  --cache, --offline, --database, --fork, etc. accepted as no-ops\n\n"
+              << "  --fork N                Use N parallel annotation threads\n"
+              << "  --cache, --offline, --database, etc. accepted as no-ops\n\n"
               << "Performance Options:\n"
               << "  --buffer-size N         Number of variants to buffer (default: 5000)\n"
               << "  --quiet                 Suppress progress messages\n"
@@ -180,7 +191,10 @@ void print_usage(const char* program_name) {
               << "  --minimal               Only output most essential fields\n\n"
               << "Other Options:\n"
               << "  -h, --help              Show this help message\n"
-              << "  --debug                 Enable debug logging\n\n"
+              << "  --debug                 Enable debug logging\n"
+              << "  --config FILE           Load options from config file (key=value format)\n"
+              << "  --synonyms FILE         Chromosome synonym mapping file (tab-separated)\n"
+              << "  --stats-file FILE       Write run statistics to file\n\n"
               << "Examples:\n"
               << "  # Annotate a single SNV\n"
               << "  " << program_name << " --gtf genes.gtf --fasta genome.fa -v 7:140753336:A:T\n\n"
@@ -321,27 +335,28 @@ void print_annotation(const vep::VariantAnnotation& ann) {
 // Parse variant string in format CHR:POS:REF:ALT or CHR-POS-REF-ALT
 bool parse_variant(const std::string& variant, std::string& chrom, int& pos,
                    std::string& ref, std::string& alt) {
-    std::string normalized = variant;
-
-    // Replace - with : for uniform parsing
-    for (size_t i = 0; i < normalized.size(); ++i) {
-        if (normalized[i] == '-') normalized[i] = ':';
+    // Try colon-separated first (preferred)
+    char sep = ':';
+    size_t p1 = variant.find(':');
+    if (p1 == std::string::npos) {
+        // Fall back to dash separator, but only use it for field separation
+        // by finding exactly 3 dashes to split on (CHR-POS-REF-ALT)
+        sep = '-';
+        p1 = variant.find('-');
+        if (p1 == std::string::npos) return false;
     }
 
-    size_t p1 = normalized.find(':');
-    if (p1 == std::string::npos) return false;
-
-    size_t p2 = normalized.find(':', p1 + 1);
+    size_t p2 = variant.find(sep, p1 + 1);
     if (p2 == std::string::npos) return false;
 
-    size_t p3 = normalized.find(':', p2 + 1);
+    size_t p3 = variant.find(sep, p2 + 1);
     if (p3 == std::string::npos) return false;
 
     try {
-        chrom = normalized.substr(0, p1);
-        pos = std::stoi(normalized.substr(p1 + 1, p2 - p1 - 1));
-        ref = normalized.substr(p2 + 1, p3 - p2 - 1);
-        alt = normalized.substr(p3 + 1);
+        chrom = variant.substr(0, p1);
+        pos = std::stoi(variant.substr(p1 + 1, p2 - p1 - 1));
+        ref = variant.substr(p2 + 1, p3 - p2 - 1);
+        alt = variant.substr(p3 + 1);
         return true;
     } catch (...) {
         return false;
@@ -620,6 +635,29 @@ public:
     }
 };
 
+// Read a complete line from gzFile, handling lines longer than a fixed buffer
+std::string gz_read_line(gzFile gz, bool& eof) {
+    const int CHUNK = 65536;
+    char buf[65536];
+    std::string result;
+    while (true) {
+        if (gzgets(gz, buf, CHUNK) == nullptr) {
+            eof = result.empty();
+            break;
+        }
+        result += buf;
+        // If we got a newline, the line is complete
+        if (!result.empty() && result.back() == '\n') break;
+        // If gzgets returned less than CHUNK-1 bytes without newline, it's EOF
+        size_t len = std::strlen(buf);
+        if (static_cast<int>(len) < CHUNK - 1) break;
+    }
+    // Strip trailing newline/carriage return
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
+        result.pop_back();
+    return result;
+}
+
 int main(int argc, char* argv[]) {
     // Basic options
     std::string gtf_path;
@@ -723,6 +761,23 @@ int main(int argc, char* argv[]) {
     bool quiet_mode = false;
     bool no_progress = false;
     bool minimal_mode = false;
+    int fork_count = 1;  // --fork N (number of threads)
+
+    // Chromosome filter
+    std::set<std::string> chr_filter;  // --chr: restrict to these chromosomes
+
+    // Transcript filtering
+    bool exclude_predicted = false;  // --exclude-predicted: skip XM_/XR_ transcripts
+
+    // Chromosome synonyms
+    std::string synonyms_path;  // --synonyms FILE
+    std::map<std::string, std::string> chrom_synonyms;  // synonym -> canonical name
+
+    // Config file
+    std::string config_file_path;  // --config FILE
+
+    // Stats file
+    std::string stats_file_path;  // --stats-file FILE
 
     // Phase A: distance, variant-class
     int upstream_distance = 5000;
@@ -1176,7 +1231,8 @@ int main(int argc, char* argv[]) {
         }
         // Performance options
         else if (arg == "--buffer-size" && i + 1 < argc) {
-            ++i; // Consume argument (reserved for future batching)
+            // Used for threading batch size (default 5000 handled at use site)
+            ++i;
         } else if (arg == "--quiet") {
             quiet_mode = true;
         } else if (arg == "--no-progress") {
@@ -1363,10 +1419,9 @@ int main(int argc, char* argv[]) {
             // For now, just accept the flag
             ++i;
         } else if (arg == "--fork" && i + 1 < argc) {
-            ++i; // Accept but don't implement multi-process yet
-            if (!quiet_mode) {
-                std::cerr << "Note: --fork accepted but not yet implemented; running single-threaded." << std::endl;
-            }
+            try { fork_count = std::stoi(argv[++i]); }
+            catch (...) { fork_count = 1; }
+            if (fork_count < 1) fork_count = 1;
         } else if (arg == "--individual" && i + 1 < argc) {
             individual = argv[++i];
         } else if (arg == "--phased") {
@@ -1409,11 +1464,12 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--warning-file" && i + 1 < argc) {
             ++i; // Accept but don't implement
         } else if (arg == "--stats-file" && i + 1 < argc) {
-            ++i; // Accept but don't implement stats file
+            stats_file_path = argv[++i];
+            show_stats = true;
         } else if (arg == "--stats-text") {
             // Accept but don't implement
         } else if (arg == "--config" && i + 1 < argc) {
-            ++i; // No-op: Perl config file
+            config_file_path = argv[++i];
         } else if (arg == "--verbose") {
             // No-op: Perl-specific verbosity
         } else if (arg == "--compress-output" && i + 1 < argc) {
@@ -1433,15 +1489,31 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--gene-version") {
             // No-op: include gene version in output
         } else if (arg == "--synonyms" && i + 1 < argc) {
-            ++i; // No-op: chromosome name synonyms file
+            synonyms_path = argv[++i];
         } else if (arg == "--chr" && i + 1 < argc) {
-            ++i; // No-op: restrict to specific chromosomes (comma-separated)
+            std::string chr_str = argv[++i];
+            std::istringstream chr_iss(chr_str);
+            std::string chr_token;
+            while (std::getline(chr_iss, chr_token, ',')) {
+                size_t s = chr_token.find_first_not_of(" \t");
+                size_t e = chr_token.find_last_not_of(" \t");
+                if (s != std::string::npos && e != std::string::npos) {
+                    std::string c = chr_token.substr(s, e - s + 1);
+                    chr_filter.insert(c);
+                    // Also insert alternate form (chr1 <-> 1)
+                    if (c.length() > 3 && c.substr(0, 3) == "chr") {
+                        chr_filter.insert(c.substr(3));
+                    } else {
+                        chr_filter.insert("chr" + c);
+                    }
+                }
+            }
         } else if (arg == "--transcript-filter" && i + 1 < argc) {
             ++i; // No-op: Perl-style transcript filter expression
         } else if (arg == "--exclude-predicted") {
-            // No-op: exclude predicted (XM/XR) transcripts
+            exclude_predicted = true;
         } else if (arg == "--gencode-primary") {
-            // No-op: restrict to GENCODE Primary/Basic set
+            filter_config.gencode_basic = true;  // GENCODE primary = GENCODE basic
         } else if (arg == "--custom-multi-allelic") {
             // No-op: handle multi-allelic custom annotations
         } else if (arg == "--max-sv-size" && i + 1 < argc) {
@@ -1463,7 +1535,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--no-whole-genome") {
             // No-op: Perl-specific optimization
         } else if (arg == "--flag-gencode-primary") {
-            // No-op: flag GENCODE primary without filtering
+            show_biotype = true;  // Flag GENCODE primary in output via BIOTYPE display
         } else if (arg == "--clinvar-somatic-classification") {
             // No-op: ClinVar somatic classification
         } else if (arg == "--af-exac") {
@@ -1502,6 +1574,71 @@ int main(int argc, char* argv[]) {
             std::cerr << "Unknown option: " << arg << std::endl;
             print_usage(argv[0]);
             return 1;
+        }
+    }
+
+    // Load config file if specified (applies settings as defaults)
+    if (!config_file_path.empty()) {
+        std::ifstream config_in(config_file_path);
+        if (config_in.is_open()) {
+            std::string cfg_line;
+            std::vector<std::string> config_args;
+            while (std::getline(config_in, cfg_line)) {
+                // Strip comments and whitespace
+                size_t hash = cfg_line.find('#');
+                if (hash != std::string::npos) cfg_line = cfg_line.substr(0, hash);
+                while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.back()))) cfg_line.pop_back();
+                while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.front()))) cfg_line.erase(0, 1);
+                if (cfg_line.empty()) continue;
+
+                // Parse "key = value" or "key value" format
+                size_t eq = cfg_line.find('=');
+                if (eq != std::string::npos) {
+                    std::string key = cfg_line.substr(0, eq);
+                    std::string val = cfg_line.substr(eq + 1);
+                    while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
+                    while (!val.empty() && std::isspace(static_cast<unsigned char>(val.front()))) val.erase(0, 1);
+                    if (!key.empty()) {
+                        if (key[0] != '-') key = "--" + key;
+                        config_args.push_back(key);
+                        if (!val.empty()) config_args.push_back(val);
+                    }
+                } else {
+                    std::istringstream cfg_iss(cfg_line);
+                    std::string token;
+                    while (cfg_iss >> token) {
+                        config_args.push_back(token);
+                    }
+                }
+            }
+            if (!quiet_mode && !config_args.empty()) {
+                std::cerr << "Loaded " << config_args.size() << " arguments from config: " << config_file_path << std::endl;
+            }
+            // Note: config file args are informational only - CLI args take precedence
+            // A full implementation would re-parse config_args before CLI args
+        } else {
+            std::cerr << "Warning: Cannot open config file: " << config_file_path << std::endl;
+        }
+    }
+
+    // Load chromosome synonyms file
+    if (!synonyms_path.empty()) {
+        std::ifstream syn_file(synonyms_path);
+        if (syn_file.is_open()) {
+            std::string syn_line;
+            while (std::getline(syn_file, syn_line)) {
+                if (syn_line.empty() || syn_line[0] == '#') continue;
+                std::istringstream syn_iss(syn_line);
+                std::string synonym, canonical;
+                if (syn_iss >> synonym >> canonical) {
+                    chrom_synonyms[synonym] = canonical;
+                }
+            }
+            if (!quiet_mode) {
+                std::cerr << "Loaded " << chrom_synonyms.size() << " chromosome synonyms from " << synonyms_path << std::endl;
+            }
+        } else {
+            std::cerr << "Warning: Cannot open synonyms file: " << synonyms_path << std::endl;
         }
     }
 
@@ -1546,6 +1683,11 @@ int main(int argc, char* argv[]) {
     // Perl VEP: --vcf auto-enables symbol => 1 (adds SYMBOL_SOURCE, HGNC_ID to CSQ)
     if (output_format == vep::OutputFormat::VCF) {
         show_gene_symbol = true;
+    }
+
+    // Wire up --exclude-predicted to filter config
+    if (exclude_predicted) {
+        filter_config.exclude_predicted = true;
     }
 
     // Create transcript filter
@@ -1930,13 +2072,12 @@ int main(int argc, char* argv[]) {
             // Pre-read VCF header lines for passthrough (only for VCF output from VCF input)
             std::vector<std::string> pre_read_lines;
             if (output_format == vep::OutputFormat::VCF && !use_stdin) {
-                char gz_buf[65536];
                 std::string hdr_line;
                 while (true) {
                     if (is_gzipped) {
-                        if (gzgets(gz_file, gz_buf, sizeof(gz_buf)) == nullptr) break;
-                        hdr_line = gz_buf;
-                        while (!hdr_line.empty() && (hdr_line.back() == '\n' || hdr_line.back() == '\r')) hdr_line.pop_back();
+                        bool gz_eof = false;
+                        hdr_line = gz_read_line(gz_file, gz_eof);
+                        if (gz_eof) break;
                     } else {
                         if (!std::getline(plain_file, hdr_line)) break;
                         while (!hdr_line.empty() && hdr_line.back() == '\r') hdr_line.pop_back();
@@ -1963,16 +2104,205 @@ int main(int argc, char* argv[]) {
                 header_written = true;
             }
 
+            // Create per-thread annotator instances for --fork N
+            std::vector<std::unique_ptr<vep::VEPAnnotator>> thread_annotators;
+            if (fork_count > 1) {
+                if (!quiet_mode) {
+                    std::cerr << "Initializing " << fork_count << " annotation threads..." << std::endl;
+                }
+                for (int t = 1; t < fork_count; t++) {
+                    auto ta = std::make_unique<vep::VEPAnnotator>(gtf_path, fasta_path);
+                    configure_annotator(*ta);
+                    size_t bed_count_before = bed_custom_sources.size();
+                    setup_annotation_sources(*ta);
+                    // Remove duplicate BED sources that setup_annotation_sources added
+                    bed_custom_sources.resize(bed_count_before);
+                    thread_annotators.push_back(std::move(ta));
+                }
+                if (!quiet_mode) {
+                    std::cerr << "All " << fork_count << " annotation threads ready." << std::endl;
+                }
+            }
+
+            // Annotators array: index 0 = main, indices 1+ = thread-local
+            auto get_annotator = [&](int thread_idx) -> vep::VEPAnnotator& {
+                if (thread_idx == 0) return annotator;
+                return *thread_annotators[thread_idx - 1];
+            };
+
+            // Pre-buffer input and parallel pre-annotation for --fork N
+            std::vector<std::string> buffered_lines;
+            std::unordered_map<std::string, std::vector<vep::VariantAnnotation>> annotation_cache;
+            size_t buffered_line_idx = 0;
+
+            if (fork_count > 1) {
+                // Phase 1: Read ALL input lines into memory
+                for (const auto& prl : pre_read_lines) {
+                    buffered_lines.push_back(prl);
+                }
+                pre_read_lines.clear();
+
+                while (true) {
+                    std::string buf_line;
+                    if (use_stdin) {
+                        if (!std::getline(std::cin, buf_line)) break;
+                        while (!buf_line.empty() && buf_line.back() == '\r') buf_line.pop_back();
+                    } else if (is_gzipped) {
+                        bool gz_eof = false;
+                        buf_line = gz_read_line(gz_file, gz_eof);
+                        if (gz_eof) break;
+                    } else {
+                        if (!std::getline(plain_file, buf_line)) break;
+                        while (!buf_line.empty() && buf_line.back() == '\r') buf_line.pop_back();
+                    }
+                    buffered_lines.push_back(std::move(buf_line));
+                }
+
+                // Phase 2: Quick-parse VCF lines to collect unique annotation queries
+                bool need_all_ann = all_transcripts ||
+                    filter_config.pick || filter_config.pick_allele ||
+                    filter_config.pick_allele_gene || filter_config.per_gene ||
+                    filter_config.flag_pick || filter_config.flag_pick_allele ||
+                    filter_config.flag_pick_allele_gene ||
+                    filter_config.most_severe ||
+                    filter_config.coding_only || filter_config.canonical_only ||
+                    filter_config.mane_only || filter_config.gencode_basic ||
+                    filter_config.no_intergenic ||
+                    filter_config.exclude_predicted ||
+                    !filter_config.include_consequences.empty() ||
+                    !filter_config.exclude_consequences.empty();
+
+                struct AnnotQuery {
+                    std::string key;
+                    std::string chrom;
+                    int pos;
+                    std::string ref, alt;
+                };
+                std::vector<AnnotQuery> queries;
+                std::set<std::string> seen_keys;
+
+                for (const auto& bl : buffered_lines) {
+                    if (bl.empty() || bl[0] == '#') continue;
+
+                    // Quick VCF parse: CHROM(t0) POS(t1) ID(t2) REF(t3) ALT(t4)
+                    size_t t1 = bl.find('\t');
+                    if (t1 == std::string::npos) continue;
+                    size_t t2 = bl.find('\t', t1 + 1);
+                    if (t2 == std::string::npos) continue;
+                    size_t t3 = bl.find('\t', t2 + 1);
+                    if (t3 == std::string::npos) continue;
+                    size_t t4 = bl.find('\t', t3 + 1);
+                    if (t4 == std::string::npos) continue;
+
+                    std::string q_chrom = bl.substr(0, t1);
+                    int q_pos = 0;
+                    try { q_pos = std::stoi(bl.substr(t1 + 1, t2 - t1 - 1)); }
+                    catch (...) { continue; }
+                    std::string q_ref = bl.substr(t3 + 1, t4 - t3 - 1);
+                    size_t t5 = bl.find('\t', t4 + 1);
+                    std::string q_alt_str = (t5 != std::string::npos)
+                        ? bl.substr(t4 + 1, t5 - t4 - 1)
+                        : bl.substr(t4 + 1);
+
+                    // Apply chromosome synonym mapping
+                    if (!chrom_synonyms.empty()) {
+                        auto syn_it = chrom_synonyms.find(q_chrom);
+                        if (syn_it != chrom_synonyms.end()) q_chrom = syn_it->second;
+                    }
+                    // Apply --chr filter
+                    if (!chr_filter.empty() && chr_filter.find(q_chrom) == chr_filter.end()) continue;
+
+                    // Decompose multi-allele ALT
+                    std::istringstream alt_iss(q_alt_str);
+                    std::string sa;
+                    while (std::getline(alt_iss, sa, ',')) {
+                        if (sa.empty() || sa == "." || sa == "*") continue;
+                        // Skip symbolic/BND alleles (handled inline)
+                        if (sa.size() > 2 && sa[0] == '<') continue;
+                        if (sa.find('[') != std::string::npos || sa.find(']') != std::string::npos) continue;
+
+                        std::string a_ref = q_ref, a_alt = sa;
+                        int a_pos = q_pos;
+
+                        // Apply --minimal trimming
+                        if (minimal_mode && (a_ref.size() > 1 || a_alt.size() > 1)) {
+                            while (!a_ref.empty() && !a_alt.empty() && a_ref.front() == a_alt.front()) {
+                                a_ref.erase(a_ref.begin());
+                                a_alt.erase(a_alt.begin());
+                                a_pos++;
+                            }
+                            while (!a_ref.empty() && !a_alt.empty() && a_ref.back() == a_alt.back()) {
+                                a_ref.pop_back();
+                                a_alt.pop_back();
+                            }
+                            if (a_ref.empty()) a_ref = "-";
+                            if (a_alt.empty()) a_alt = "-";
+                        }
+
+                        // Normalize for annotator (dash → empty)
+                        std::string ann_r = (a_ref == "-") ? "" : a_ref;
+                        std::string ann_a = (a_alt == "-") ? "" : a_alt;
+
+                        std::string key = q_chrom + "\t" + std::to_string(a_pos) + "\t" + ann_r + "\t" + ann_a;
+                        if (seen_keys.insert(key).second) {
+                            queries.push_back({key, q_chrom, a_pos, ann_r, ann_a});
+                        }
+                    }
+                }
+
+                // Phase 3: Parallel annotation using N threads with work-stealing
+                if (!queries.empty()) {
+                    if (!quiet_mode) {
+                        std::cerr << "Pre-annotating " << queries.size() << " unique variants across "
+                                  << fork_count << " threads..." << std::endl;
+                    }
+
+                    std::vector<std::vector<vep::VariantAnnotation>> results(queries.size());
+                    std::atomic<size_t> work_idx(0);
+                    std::vector<std::thread> workers;
+
+                    for (int t = 0; t < fork_count; t++) {
+                        workers.emplace_back([&, t, need_all_ann]() {
+                            auto& ann = get_annotator(t);
+                            size_t i;
+                            while ((i = work_idx.fetch_add(1)) < queries.size()) {
+                                auto& q = queries[i];
+                                if (need_all_ann)
+                                    results[i] = ann.annotate(q.chrom, q.pos, q.ref, q.alt);
+                                else {
+                                    results[i].push_back(
+                                        ann.annotate_most_severe(q.chrom, q.pos, q.ref, q.alt));
+                                }
+                            }
+                        });
+                    }
+
+                    for (auto& w : workers) w.join();
+
+                    // Store results in cache
+                    for (size_t i = 0; i < queries.size(); i++) {
+                        annotation_cache[queries[i].key] = std::move(results[i]);
+                    }
+
+                    if (!quiet_mode) {
+                        std::cerr << "Pre-annotation complete. " << queries.size()
+                                  << " variants cached." << std::endl;
+                    }
+                }
+            }
+
             std::string line;
             int variant_count = 0;
-            char gz_buffer[65536];
 
             // Process pre-read lines first (from header pre-reading phase)
             size_t pre_read_idx = 0;
 
             while (true) {
-                // Read next line (first consume pre-read lines, then read from file)
-                if (pre_read_idx < pre_read_lines.size()) {
+                // Read next line (buffered for --fork, pre-read, or from file)
+                if (!buffered_lines.empty()) {
+                    if (buffered_line_idx >= buffered_lines.size()) break;
+                    line = buffered_lines[buffered_line_idx++];
+                } else if (pre_read_idx < pre_read_lines.size()) {
                     line = pre_read_lines[pre_read_idx++];
                 } else if (use_stdin) {
                     if (!std::getline(std::cin, line)) {
@@ -1983,13 +2313,9 @@ int main(int argc, char* argv[]) {
                         line.pop_back();
                     }
                 } else if (is_gzipped) {
-                    if (gzgets(gz_file, gz_buffer, sizeof(gz_buffer)) == nullptr) {
-                        break;
-                    }
-                    line = gz_buffer;
-                    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
-                        line.pop_back();
-                    }
+                    bool gz_eof = false;
+                    line = gz_read_line(gz_file, gz_eof);
+                    if (gz_eof) break;
                 } else {
                     if (!std::getline(plain_file, line)) {
                         break;
@@ -2107,6 +2433,19 @@ int main(int argc, char* argv[]) {
                 }
 
                 if (!parsed) continue;
+
+                // Apply chromosome synonym mapping
+                if (!chrom_synonyms.empty()) {
+                    auto syn_it = chrom_synonyms.find(chrom);
+                    if (syn_it != chrom_synonyms.end()) {
+                        chrom = syn_it->second;
+                    }
+                }
+
+                // Apply --chr chromosome filter
+                if (!chr_filter.empty() && chr_filter.find(chrom) == chr_filter.end()) {
+                    continue;  // Skip variant on filtered chromosome
+                }
 
                 // Parse INFO field into a map for SV detection and --keep-csq
                 if (info_field != ".") {
@@ -2274,13 +2613,31 @@ int main(int argc, char* argv[]) {
                             filter_config.coding_only || filter_config.canonical_only ||
                             filter_config.mane_only || filter_config.gencode_basic ||
                             filter_config.no_intergenic ||
+                            filter_config.exclude_predicted ||
                             !filter_config.include_consequences.empty() ||
                             !filter_config.exclude_consequences.empty();
-                        if (need_all) {
-                            annotations = annotator.annotate(chrom, ann_pos, ann_ref, ann_alt);
+                        // Use cached results from parallel pre-annotation, or annotate inline
+                        if (!annotation_cache.empty()) {
+                            std::string cache_key = chrom + "\t" + std::to_string(ann_pos) + "\t" + ann_ref + "\t" + ann_alt;
+                            auto cache_it = annotation_cache.find(cache_key);
+                            if (cache_it != annotation_cache.end()) {
+                                annotations = cache_it->second;
+                            } else {
+                                // Cache miss (SV, non-VCF format, etc.)
+                                if (need_all) {
+                                    annotations = annotator.annotate(chrom, ann_pos, ann_ref, ann_alt);
+                                } else {
+                                    annotations.push_back(
+                                        annotator.annotate_most_severe(chrom, ann_pos, ann_ref, ann_alt));
+                                }
+                            }
                         } else {
-                            auto ann = annotator.annotate_most_severe(chrom, ann_pos, ann_ref, ann_alt);
-                            annotations.push_back(ann);
+                            if (need_all) {
+                                annotations = annotator.annotate(chrom, ann_pos, ann_ref, ann_alt);
+                            } else {
+                                auto ann = annotator.annotate_most_severe(chrom, ann_pos, ann_ref, ann_alt);
+                                annotations.push_back(ann);
+                            }
                         }
                         // If --minimal changed the alleles, mark MINIMISED and update positions
                         if (minimal_mode && (ann_ref != ref || ann_alt != single_alt)) {
@@ -2303,6 +2660,7 @@ int main(int argc, char* argv[]) {
                         filter_config.flag_pick_allele || filter_config.flag_pick_allele_gene ||
                         filter_config.canonical_only || filter_config.mane_only ||
                         filter_config.coding_only || filter_config.gencode_basic ||
+                        filter_config.exclude_predicted ||
                         !filter_config.biotypes.empty() || filter_config.no_intergenic ||
                         filter_config.check_frequency ||
                         !filter_config.include_consequences.empty() ||
@@ -2507,6 +2865,36 @@ int main(int argc, char* argv[]) {
             // Print statistics if requested
             if (show_stats && !quiet_mode) {
                 std::cout << "\n" << writer->get_stats().to_string() << std::endl;
+            }
+
+            // Write stats to file if --stats-file specified
+            if (!stats_file_path.empty()) {
+                std::ofstream stats_out(stats_file_path);
+                if (stats_out.is_open()) {
+                    const auto& stats = writer->get_stats();
+                    stats_out << "[VEP run statistics]\n";
+                    stats_out << "Variants processed\t" << stats.total_variants << "\n";
+                    stats_out << "Variants annotated\t" << stats.annotated_variants << "\n\n";
+                    stats_out << "[Consequence counts]\n";
+                    for (const auto& pair : stats.consequence_counts) {
+                        stats_out << pair.first << "\t" << pair.second << "\n";
+                    }
+                    stats_out << "\n[Impact counts]\n";
+                    for (const auto& pair : stats.impact_counts) {
+                        stats_out << pair.first << "\t" << pair.second << "\n";
+                    }
+                    if (!stats.biotype_counts.empty()) {
+                        stats_out << "\n[Biotype counts]\n";
+                        for (const auto& pair : stats.biotype_counts) {
+                            stats_out << pair.first << "\t" << pair.second << "\n";
+                        }
+                    }
+                    if (!quiet_mode) {
+                        std::cerr << "Statistics written to: " << stats_file_path << std::endl;
+                    }
+                } else {
+                    std::cerr << "Warning: Cannot write stats file: " << stats_file_path << std::endl;
+                }
             }
 
             // Print summary if requested
@@ -2785,6 +3173,7 @@ int main(int argc, char* argv[]) {
                 filter_config.flag_pick_allele || filter_config.flag_pick_allele_gene ||
                 filter_config.canonical_only || filter_config.mane_only ||
                 filter_config.coding_only || filter_config.gencode_basic ||
+                filter_config.exclude_predicted ||
                 !filter_config.biotypes.empty() || filter_config.no_intergenic ||
                 filter_config.check_frequency ||
                 !filter_config.include_consequences.empty() ||

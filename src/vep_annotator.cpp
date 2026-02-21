@@ -2768,6 +2768,17 @@ int VEPAnnotator::calculate_cds_position(int genomic_pos, const Transcript& tran
         }
     }
 
+    // Adjust for CDS phase in cds_start_NF transcripts
+    if (in_cds && transcript.cds_start_NF && !transcript.cds_regions.empty()) {
+        int first_phase = (transcript.strand == '+')
+            ? transcript.cds_regions.front().phase
+            : transcript.cds_regions.back().phase;
+        if (first_phase > 0 && first_phase <= 2) {
+            cds_pos -= first_phase;
+            if (cds_pos <= 0) return 0; // Position is in the partial codon
+        }
+    }
+
     return in_cds ? cds_pos : 0;
 }
 
@@ -2787,6 +2798,18 @@ std::string VEPAnnotator::build_cds_sequence(
             cds_seq += seg;
         }
     }
+
+    // For cds_start_NF transcripts, trim leading bases per first CDS phase
+    if (transcript.cds_start_NF && !transcript.cds_regions.empty()) {
+        int first_phase = (transcript.strand == '+')
+            ? transcript.cds_regions.front().phase
+            : transcript.cds_regions.back().phase;
+        if (first_phase > 0 && first_phase <= 2 &&
+            static_cast<int>(cds_seq.size()) > first_phase) {
+            cds_seq = cds_seq.substr(first_phase);
+        }
+    }
+
     return cds_seq;
 }
 

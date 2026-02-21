@@ -66,6 +66,7 @@ struct TranscriptFilterConfig {
     bool coding_only = false;       // Only protein_coding transcripts
     bool gencode_basic = false;     // Only GENCODE basic transcripts
     bool all_refseq = false;        // Include all RefSeq transcripts
+    bool exclude_predicted = false; // Exclude XM_/XR_ predicted transcripts
     std::set<std::string> biotypes; // Allowed biotypes (empty = all)
 
     // Consequence filtering
@@ -351,6 +352,14 @@ private:
         // MANE only (Perl VEP: only MANE Select, not MANE Plus Clinical)
         if (config_.mane_only && !ext.is_mane_select) {
             return false;
+        }
+
+        // Exclude predicted (XM_/XR_) RefSeq transcripts
+        if (config_.exclude_predicted && !ann.transcript_id.empty()) {
+            if (ann.transcript_id.substr(0, 3) == "XM_" ||
+                ann.transcript_id.substr(0, 3) == "XR_") {
+                return false;
+            }
         }
 
         // Coding only

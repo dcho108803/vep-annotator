@@ -34,6 +34,7 @@ endif()
 
 # Find required packages
 find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
 
 # Find optional htslib for tabix support
 option(WITH_HTSLIB "Enable tabix support via htslib for large VCF files" ON)
@@ -165,6 +166,7 @@ add_executable(vep_annotator src/main.cpp)
 target_link_libraries(vep_annotator
     PRIVATE
         vep_annotator_lib
+        Threads::Threads
 )
 
 # Create filter_vep executable
@@ -217,6 +219,10 @@ if(BUILD_TESTS)
         tests/test_codon_table.cpp
         tests/test_hgvs.cpp
         tests/test_spliceai.cpp
+        tests/test_filter_vep.cpp
+        tests/test_cli.cpp
+        tests/test_transcript_filter.cpp
+        tests/test_output.cpp
     )
     target_link_libraries(vep_tests
         PRIVATE

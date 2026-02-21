@@ -54,10 +54,12 @@ A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VE
 - **LoFtool**: Gene-level constraint scores
 
 ### Custom Annotations
-- Add any VCF as an annotation source (`--annotation`, `--annotation-tabix`)
-- BED file annotations (`--custom`)
+- Add any VCF file as an annotation source with two loading modes:
+  - **In-memory** (`--annotation`): Loads entire file into RAM for fast lookups — best for small files (<100K records)
+  - **Tabix-indexed** (`--annotation-tabix`): On-disk queries via htslib — instant startup, minimal memory, scales to billions of records
+- BED file annotations for interval-based overlaps
 - Perl VEP-compatible `--custom` syntax for VCF, BED, bigWig, GFF/GTF
-- Tabix-indexed file support for memory-efficient large-file queries
+- See [Custom Annotation Files](#custom-annotation-files) below for detailed usage
 
 ### Plugin System
 - Extend with custom annotation sources via shared libraries
@@ -272,9 +274,11 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 
 | Option | Description |
 |--------|-------------|
-| `--annotation NAME:VCF[:FIELDS]` | Add VCF annotation source (in-memory) |
-| `--annotation-tabix NAME:VCF[:FIELDS]` | Add tabix-indexed VCF source (on-disk) |
-| `--custom FILE,NAME,TYPE,OVERLAP,0,FIELDS` | Perl VEP-compatible custom source |
+| `--annotation NAME:VCF[:FIELDS]` | Add VCF annotation source (loaded into memory) |
+| `--annotation-tabix NAME:VCF[:FIELDS]` | Add tabix-indexed VCF source (on-disk queries) |
+| `--custom FILE,NAME,TYPE,OVERLAP,0,FIELDS` | Perl VEP-compatible custom source (VCF, BED, bigWig) |
+
+See [Custom Annotation Files](#custom-annotation-files) for detailed usage, examples, and performance guidance.
 
 ### Filtering
 
@@ -287,16 +291,16 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 
 ## Performance
 
-Benchmarked against Perl VEP on the same variant sets:
+Benchmarked on 100,000 chr22 variants (Release build, Apple Silicon M-series):
 
-| Metric | VEP Annotator (C++) | Perl VEP |
-|--------|--------------------:|----------:|
-| Throughput (single gene, debug build) | ~15,000-21,000 var/sec | ~300 var/sec |
-| 100K variants (TSV) | ~4.7 sec | ~5 min |
-| 100K variants (JSON) | ~6.7 sec | ~6 min |
-| 100K variants (--everything) | ~6.9 sec | ~8 min |
+| Mode | Wall time | Throughput | vs Perl VEP |
+|------|----------:|-----------:|------------:|
+| Single thread, TSV | 4.0s | **25,000 var/sec** | ~80x faster |
+| Single thread, JSON | 4.0s | **25,000 var/sec** | ~80x faster |
+| Single thread, --everything | 4.4s | **22,700 var/sec** | ~75x faster |
+| --fork 4, --everything | 2.9s | **34,500 var/sec** | ~115x faster |
 
-**Multi-threaded:** Use `--fork N` for parallel annotation with N threads. Input is pre-buffered and annotations are distributed across threads using atomic work-stealing for near-linear scaling.
+**Multi-threaded:** Use `--fork N` for parallel annotation with N threads. Input is pre-buffered and annotations are distributed across threads using atomic work-stealing.
 
 ### Memory Usage
 
@@ -428,6 +432,203 @@ int main() {
 | `-DWITH_HTSLIB=ON/OFF` | ON | Enable tabix support |
 | `-DWITH_BIGWIG=ON/OFF` | ON | Enable bigWig support |
 | `-DCMAKE_BUILD_TYPE=Release/Debug` | Release | Build type |
+
+## Custom Annotation Files
+
+You can add any VCF, BED, or bigWig file as a custom annotation source. There are two loading modes for VCF files, plus Perl VEP-compatible `--custom` syntax.
+
+### Loading Modes
+
+#### Tabix-indexed (recommended for large files)
+
+```bash
+--annotation-tabix NAME:FILE[:FIELDS]
+```
+
+**How it works:** Opens only the tabix index at startup. Each variant query performs an on-disk seek to the relevant genomic region, decompresses a single block, and extracts matching records. No data is loaded into memory.
+
+**Best for:** Large annotation databases (ClinVar, gnomAD, dbSNP, custom frequency databases).
+
+| File | Records | Startup time | Memory overhead |
+|------|--------:|-------------:|----------------:|
+| ClinVar (~2M records) | ~2M | instant | ~10MB (index) |
+| gnomAD exomes (~16M) | ~16M | instant | ~50MB (index) |
+| gnomAD genomes (~750M) | ~750M | instant | ~200MB (index) |
+
+**Requires:** bgzip compression + tabix index (see [File Preparation](#file-preparation) below).
+
+#### In-memory (for small files)
+
+```bash
+--annotation NAME:FILE[:FIELDS]
+```
+
+**How it works:** Reads the entire VCF into a hash map indexed by chromosome and position. All records are parsed and stored in memory at startup.
+
+**Best for:** Small annotation files (<100K records) where you want zero per-query I/O overhead.
+
+| File | Records | Load time | Memory usage |
+|------|--------:|----------:|-------------:|
+| Panel variants (~1K) | ~1K | <1 sec | ~1MB |
+| Custom list (~10K) | ~10K | ~1 sec | ~10MB |
+| ClinVar (~2M) | ~2M | ~10-20 sec | ~500MB |
+| Large databases (>10M) | >10M | minutes | several GB+ |
+
+### File Preparation
+
+Tabix-indexed sources require bgzip compression and a tabix index:
+
+```bash
+# If your VCF is uncompressed:
+bgzip myfile.vcf                    # Creates myfile.vcf.gz
+tabix -p vcf myfile.vcf.gz          # Creates myfile.vcf.gz.tbi
+
+# If already gzip compressed (re-compress with bgzip):
+zcat myfile.vcf.gz | bgzip > myfile.vcf.bgz
+tabix -p vcf myfile.vcf.bgz
+
+# Verify the index works:
+tabix myfile.vcf.gz chr1:10000-20000
+```
+
+**Note:** Regular gzip files will NOT work with tabix — the file must be compressed with `bgzip` (from htslib). Both `bgzip` and `tabix` are included with htslib (`brew install htslib`).
+
+### Usage Examples
+
+#### Adding a ClinVar annotation source
+
+```bash
+# Prep the file (once):
+bgzip clinvar.vcf && tabix -p vcf clinvar.vcf.gz
+
+# Use tabix mode — loads instantly, minimal memory:
+./vep_annotator \
+    --gtf genes.gtf.gz --fasta genome.fa.gz \
+    --annotation-tabix clinvar:clinvar.vcf.gz:CLNSIG,CLNDN,CLNREVSTAT \
+    --vcf input.vcf -o output.tsv
+```
+
+Output will include `clinvar:CLNSIG`, `clinvar:CLNDN`, and `clinvar:CLNREVSTAT` in the Extra column (TSV) or `custom_annotations` (JSON).
+
+#### Adding gnomAD population frequencies
+
+```bash
+./vep_annotator \
+    --gtf genes.gtf.gz --fasta genome.fa.gz \
+    --annotation-tabix gnomad:gnomad.exomes.r2.1.1.sites.vcf.bgz:AF,AF_popmax,AC,AN \
+    --vcf input.vcf -o output.tsv
+```
+
+#### Multiple annotation sources
+
+```bash
+./vep_annotator \
+    --gtf genes.gtf.gz --fasta genome.fa.gz \
+    --annotation-tabix clinvar:clinvar.vcf.gz:CLNSIG,CLNDN \
+    --annotation-tabix gnomad:gnomad.vcf.bgz:AF,AF_popmax \
+    --annotation-tabix cosmic:cosmic.vcf.gz:CNT,GENE \
+    --annotation mylist:my_variants.vcf \
+    --vcf input.vcf -o output.tsv
+```
+
+#### Extracting all INFO fields
+
+Omit the `:FIELDS` part to extract all INFO fields from the annotation VCF:
+
+```bash
+# Extracts every INFO field from the ClinVar VCF:
+--annotation-tabix clinvar:clinvar.vcf.gz
+
+# Extracts only CLNSIG and CLNDN:
+--annotation-tabix clinvar:clinvar.vcf.gz:CLNSIG,CLNDN
+```
+
+Specifying fields is recommended for large databases to avoid extracting unnecessary data.
+
+### Perl VEP `--custom` Syntax
+
+For compatibility with existing Perl VEP workflows, the `--custom` flag is supported:
+
+```bash
+--custom FILE,NAME,TYPE,OVERLAP,COORDS,FIELDS
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `FILE` | Path to the annotation file |
+| `NAME` | Short name for the source (used as field prefix) |
+| `TYPE` | File type: `vcf`, `bed`, `bigwig`, `gff`, `gtf` |
+| `OVERLAP` | Match mode: `overlap` (position only) or `exact` (allele match) |
+| `COORDS` | Coordinate system: `0` (0-based) or `1` (1-based) |
+| `FIELDS` | Comma-separated list of fields to extract |
+
+#### VCF custom source
+
+```bash
+# Exact allele matching (recommended for variant databases):
+--custom clinvar.vcf.gz,ClinVar,vcf,exact,0,CLNSIG,CLNDN
+
+# Position-only overlap:
+--custom gnomad.vcf.bgz,gnomAD,vcf,overlap,0,AF
+```
+
+VCF `--custom` sources always use tabix mode (the file must be bgzip'd and indexed).
+
+#### BED custom source
+
+```bash
+# Annotate with regions from a BED file:
+--custom conserved_regions.bed,ConservedRegion,bed,overlap,0
+
+# BED files are loaded into memory and indexed by position for fast overlap queries.
+```
+
+BED annotations add a field with the source name containing the `name` column (column 4) of overlapping intervals, or `1` if no name column is present.
+
+#### bigWig custom source
+
+```bash
+# Add a bigWig score track:
+--custom phyloP100way.bw,MyPhyloP,bigwig,overlap,0
+```
+
+Requires libBigWig (build with `-DWITH_BIGWIG=ON`).
+
+### Output Fields
+
+Custom annotation fields appear with a `NAME:FIELD` prefix in the output:
+
+**TSV (Extra column):**
+```
+clinvar:CLNSIG=Pathogenic;clinvar:CLNDN=Hereditary_cancer;gnomad:AF=0.0001
+```
+
+**JSON (custom_annotations object):**
+```json
+{
+  "custom_annotations": {
+    "clinvar:CLNSIG": "Pathogenic",
+    "clinvar:CLNDN": "Hereditary_cancer",
+    "gnomad:AF": "0.0001"
+  }
+}
+```
+
+**VCF (CSQ INFO field):**
+Custom fields are appended to the CSQ field definition in the VCF header and included in each CSQ entry.
+
+### Co-located Variant Lookup
+
+Use `--check_existing` to look up co-located variants from a VCF database (uses tabix for efficient queries):
+
+```bash
+./vep_annotator \
+    --gtf genes.gtf.gz --fasta genome.fa.gz \
+    --check_existing dbsnp.vcf.gz \
+    --vcf input.vcf -o output.tsv
+```
+
+This populates the `Existing_variation` column with variant IDs (e.g., rs numbers) from the database.
 
 ## License
 

@@ -559,10 +559,22 @@ public:
         return true;
     }
 
+    // Find chromosome iterator, trying both chr-prefixed and non-prefixed forms
+    decltype(intervals)::const_iterator find_chrom(const std::string& chrom) const {
+        auto it = intervals.find(chrom);
+        if (it != intervals.end()) return it;
+        // Try alternate naming
+        if (chrom.length() > 3 && chrom.substr(0, 3) == "chr") {
+            return intervals.find(chrom.substr(3));
+        } else {
+            return intervals.find("chr" + chrom);
+        }
+    }
+
     // Query overlapping intervals for a 1-based position
     std::vector<const BedInterval*> query(const std::string& chrom, int pos1) const {
         std::vector<const BedInterval*> results;
-        auto it = intervals.find(chrom);
+        auto it = find_chrom(chrom);
         if (it == intervals.end()) return results;
 
         int pos0 = pos1 - 1; // Convert to 0-based
@@ -578,7 +590,7 @@ public:
     // Query overlapping intervals for a 1-based range [start, end]
     std::vector<const BedInterval*> query_range(const std::string& chrom, int start1, int end1) const {
         std::vector<const BedInterval*> results;
-        auto it = intervals.find(chrom);
+        auto it = find_chrom(chrom);
         if (it == intervals.end()) return results;
 
         int start0 = start1 - 1;
@@ -1927,6 +1939,7 @@ int main(int argc, char* argv[]) {
                         while (!hdr_line.empty() && (hdr_line.back() == '\n' || hdr_line.back() == '\r')) hdr_line.pop_back();
                     } else {
                         if (!std::getline(plain_file, hdr_line)) break;
+                        while (!hdr_line.empty() && hdr_line.back() == '\r') hdr_line.pop_back();
                     }
                     if (hdr_line.empty() || hdr_line[0] != '#') {
                         pre_read_lines.push_back(hdr_line); // First non-header line
@@ -2256,7 +2269,13 @@ int main(int argc, char* argv[]) {
                             filter_config.pick || filter_config.pick_allele ||
                             filter_config.pick_allele_gene || filter_config.per_gene ||
                             filter_config.flag_pick || filter_config.flag_pick_allele ||
-                            filter_config.flag_pick_allele_gene;
+                            filter_config.flag_pick_allele_gene ||
+                            filter_config.most_severe ||
+                            filter_config.coding_only || filter_config.canonical_only ||
+                            filter_config.mane_only || filter_config.gencode_basic ||
+                            filter_config.no_intergenic ||
+                            !filter_config.include_consequences.empty() ||
+                            !filter_config.exclude_consequences.empty();
                         if (need_all) {
                             annotations = annotator.annotate(chrom, ann_pos, ann_ref, ann_alt);
                         } else {
@@ -2783,7 +2802,9 @@ int main(int argc, char* argv[]) {
             // Add variant class for single variant mode
             for (auto& a : annotations) {
                 if (show_variant_class) {
-                    a.custom_annotations["VARIANT_CLASS"] = vep::get_variant_class(ref, alt);
+                    std::string vc_ref = (ref == "-") ? "" : ref;
+                    std::string vc_alt = (alt == "-") ? "" : alt;
+                    a.custom_annotations["VARIANT_CLASS"] = vep::get_variant_class(vc_ref, vc_alt);
                 }
                 if (show_allele_number) {
                     a.custom_annotations["ALLELE_NUM"] = "1";
@@ -2855,6 +2876,10 @@ int main(int argc, char* argv[]) {
                 std::string d_alt = alt;
                 int d_start = pos;
                 int d_end = pos + static_cast<int>(ref.size()) - 1;
+                // Handle dash-encoded alleles from --minimal mode
+                if (d_ref == "-" || d_ref.empty()) {
+                    d_end = d_start - 1; // Insertion: end < start
+                }
                 if (d_ref.size() > 1 || d_alt.size() > 1) {
                     if (!d_ref.empty() && !d_alt.empty() && d_ref[0] == d_alt[0]) {
                         d_ref = d_ref.substr(1);

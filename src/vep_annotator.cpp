@@ -6,6 +6,7 @@
 #include "hgvs_parser.hpp"
 #include "annotation_source.hpp"
 #include "file_parsers.hpp"
+#include "transcript_filter.hpp"
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -1846,20 +1847,18 @@ VariantAnnotation VEPAnnotator::annotate_most_severe(
         return empty;
     }
 
-    // Sort by consequence severity (enum order matches Perl VEP Constants.pm)
-    // Within same impact, use ConsequenceType ordering for tiebreaking
+    // Sort by consequence severity using Perl VEP severity ranking
     std::sort(all_annotations.begin(), all_annotations.end(),
               [](const VariantAnnotation& a, const VariantAnnotation& b) {
-                  // Get most severe consequence type from each annotation
-                  auto get_min_csq = [](const VariantAnnotation& ann) -> int {
-                      int min_val = static_cast<int>(ConsequenceType::UNKNOWN);
+                  auto get_min_rank = [](const VariantAnnotation& ann) -> int {
+                      int min_val = 999;
                       for (const auto& c : ann.consequences) {
-                          int v = static_cast<int>(c);
+                          int v = get_consequence_rank(c);
                           if (v < min_val) min_val = v;
                       }
                       return min_val;
                   };
-                  return get_min_csq(a) < get_min_csq(b);
+                  return get_min_rank(a) < get_min_rank(b);
               });
 
     return all_annotations[0];
@@ -1954,7 +1953,7 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
         int cds_pos = calculate_cds_position(pos, transcript);
         // For minus strand with multi-base ref, calculate_cds_position(pos) returns the
         // HIGHEST affected CDS position. Adjust to the FIRST (lowest) affected position.
-        if (transcript.strand == '-' && ref.length() > 1 && ref.length() != alt.length()) {
+        if (transcript.strand == '-' && ref.length() > 1) {
             cds_pos = cds_pos - static_cast<int>(ref.length()) + 1;
             if (cds_pos < 1) cds_pos = 1;
         }
@@ -2219,7 +2218,7 @@ void VEPAnnotator::annotate_noncds_hgvsc(
         } else {
             for (auto it = sorted_exons.rbegin(); it != sorted_exons.rend(); ++it) {
                 if (it->start >= transcript.cds_start) continue;
-                if (it->start > pos) continue;
+                if (it->end < pos) break;  // past the variant going downward
                 int ex_start = std::max(it->start, pos);
                 int ex_end = std::min(it->end, transcript.cds_start - 1);
                 if (ex_start <= ex_end) {
@@ -2546,7 +2545,7 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
     if (in_exon && pos <= transcript.cds_end && var_end >= transcript.cds_start) {
         int cds_pos = calculate_cds_position(pos, transcript);
         // For minus strand with multi-base ref, adjust from last to first affected CDS position
-        if (transcript.strand == '-' && ref.length() > 1 && ref.length() != alt.length()) {
+        if (transcript.strand == '-' && ref.length() > 1) {
             cds_pos = cds_pos - static_cast<int>(ref.length()) + 1;
             if (cds_pos < 1) cds_pos = 1;
         }
@@ -2662,7 +2661,9 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 // Apply the substitution
                 int offset_in_segment = (cds_pos - 1) - codon_region_start;
                 for (size_t k = 0; k < ref.length() && (offset_in_segment + static_cast<int>(k)) < static_cast<int>(alt_segment.length()); ++k) {
-                    char alt_base = alt[k];
+                    // For minus strand, reverse the index: genomic order is reversed in CDS
+                    size_t alt_idx = (transcript.strand == '-') ? (alt.length() - 1 - k) : k;
+                    char alt_base = alt[alt_idx];
                     if (transcript.strand == '-') {
                         alt_base = complement_base(alt_base);
                     }
@@ -2829,8 +2830,9 @@ std::pair<std::string, std::string> VEPAnnotator::get_affected_codons(
         for (size_t i = 0; i < alt.length(); ++i) {
             int codon_offset = pos_in_codon + static_cast<int>(i);
             if (codon_offset >= 0 && codon_offset < 3) {
-                char alt_base = alt[i];
-                // For reverse strand, complement the alternate base
+                // For minus strand, reverse the index: genomic order is reversed in CDS
+                size_t alt_idx = (transcript.strand == '-') ? (alt.length() - 1 - i) : i;
+                char alt_base = alt[alt_idx];
                 if (transcript.strand == '-') {
                     alt_base = complement_base(alt_base);
                 }

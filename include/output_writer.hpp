@@ -8,6 +8,7 @@
 #define OUTPUT_WRITER_HPP
 
 #include "vep_annotator.hpp"
+#include "transcript_filter.hpp"
 #include <string>
 #include <vector>
 #include <memory>
@@ -537,15 +538,13 @@ private:
         const auto& first = buffered_annotations_[0];
 
         // Determine most_severe_consequence across all transcript annotations
-        Impact best_impact = Impact::MODIFIER;
+        int best_rank = 999;
         ConsequenceType most_severe_csq = ConsequenceType::UNKNOWN;
         for (const auto& ann : buffered_annotations_) {
             for (const auto& csq : ann.consequences) {
-                Impact ci = get_impact(csq);
-                if (static_cast<int>(ci) < static_cast<int>(best_impact) ||
-                    (static_cast<int>(ci) == static_cast<int>(best_impact) &&
-                     static_cast<int>(csq) < static_cast<int>(most_severe_csq))) {
-                    best_impact = ci;
+                int rank = get_consequence_rank(csq);
+                if (rank < best_rank) {
+                    best_rank = rank;
                     most_severe_csq = csq;
                 }
             }

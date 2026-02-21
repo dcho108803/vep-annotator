@@ -194,16 +194,16 @@ struct AnnotationWithMeta {
 inline int compare_appris(const std::string& a, const std::string& b) {
     auto score = [](const std::string& s) -> int {
         if (s.empty()) return 100;
-        if (s.find("principal1") != std::string::npos) return 1;
-        if (s.find("principal2") != std::string::npos) return 2;
-        if (s.find("principal3") != std::string::npos) return 3;
-        if (s.find("principal4") != std::string::npos) return 4;
-        if (s.find("principal5") != std::string::npos) return 5;
-        if (s.find("alternative1") != std::string::npos) return 6;
-        if (s.find("alternative2") != std::string::npos) return 7;
-        if (s.find("alternative3") != std::string::npos) return 8;
-        if (s.find("alternative4") != std::string::npos) return 9;
-        if (s.find("alternative5") != std::string::npos) return 10;
+        if (s.find("principal_1") != std::string::npos) return 1;
+        if (s.find("principal_2") != std::string::npos) return 2;
+        if (s.find("principal_3") != std::string::npos) return 3;
+        if (s.find("principal_4") != std::string::npos) return 4;
+        if (s.find("principal_5") != std::string::npos) return 5;
+        if (s.find("alternative_1") != std::string::npos) return 6;
+        if (s.find("alternative_2") != std::string::npos) return 7;
+        if (s.find("alternative_3") != std::string::npos) return 8;
+        if (s.find("alternative_4") != std::string::npos) return 9;
+        if (s.find("alternative_5") != std::string::npos) return 10;
         // Any other APPRIS value
         if (s.find("principal") != std::string::npos) return 5;
         if (s.find("alternative") != std::string::npos) return 10;

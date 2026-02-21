@@ -433,6 +433,74 @@ int main() {
 | `-DWITH_BIGWIG=ON/OFF` | ON | Enable bigWig support |
 | `-DCMAKE_BUILD_TYPE=Release/Debug` | Release | Build type |
 
+## Differences from Perl VEP
+
+This C++ implementation achieves ~99.9% feature parity with Perl Ensembl VEP for core annotation functionality. The main differences fall into three categories: architectural design choices, missing features, and minor behavioral differences.
+
+### Architecture: Local Files vs Ensembl Cache
+
+The most fundamental difference is the data model. Perl VEP has three modes: `--cache` (pre-built binary data store), `--database` (live MySQL connection), and the REST API. This C++ implementation uses **local files exclusively** — a GTF for gene annotations and a FASTA for the reference genome are always required. There is no cache, database, or API connectivity.
+
+This means:
+- **Faster startup** — no cache unpacking or database connections
+- **Simpler deployment** — just the binary and your data files
+- **Explicit data sources** — every annotation source requires a file path argument (e.g., `--dbnsfp FILE`, `--spliceai FILE`, `--regulatory FILE`)
+- **No built-in frequency data** — population frequencies (gnomAD, 1000G, ESP) must be provided as custom annotation VCF files rather than being bundled in a cache
+
+### Missing Features
+
+The following Perl VEP features are **not implemented**:
+
+| Feature | Perl VEP | C++ VEP | Notes |
+|---------|----------|---------|-------|
+| Ensembl cache/database | Full support | Not available | Use `--gtf` + `--fasta` instead |
+| REST API queries | Full support | Not available | Runs purely locally |
+| Built-in population frequencies | From cache | Not built-in | Add via `--annotation-tabix gnomad:file.vcf.gz:AF` |
+| HTML statistics report | `--stats-html` | Not available | Text stats via `--stats-file` |
+| Individual/sample genotypes | `--individual` | Parsed but not functional | No per-sample consequence reporting |
+| Motif feature consequences | Full support | Not available | `MOTIF_NAME`, `MOTIF_POS`, `MOTIF_SCORE_CHANGE` not generated |
+| PubMed citations | `--pubmed` | No-op | Requires variant database |
+| Gene-phenotype associations | `--gene-phenotype` | No-op | Requires phenotype database |
+| Variant synonyms | `--var-synonyms` | No-op | Requires variant database |
+| miRNA structure annotation | `--mirna` | No-op | Not implemented |
+| LRG coordinates | `--lrg` | No-op | Not implemented |
+| GA4GH VRS format | `--ga4gh-vrs` | No-op | Not implemented |
+| BAM transcript correction | `--bam` | No-op | Not implemented |
+| Transcript filter expressions | `--transcript-filter EXPR` | No-op | Use individual filter flags instead |
+| Multi-species support | `--genomes` | No-op | Single species only |
+| Warning file | `--warning-file` | No-op | Warnings go to stderr |
+
+### Behavioral Differences
+
+Features that both versions have but behave differently:
+
+| Feature | Perl VEP behavior | C++ VEP behavior |
+|---------|-------------------|------------------|
+| `--everything` + regulatory | Automatically includes regulatory annotations from cache | Does NOT add `--regulatory` (requires explicit `--regulatory FILE` path) |
+| `--check-existing` | Uses cache for co-located variant lookup | Requires explicit VCF file path (`--check-existing dbsnp.vcf.gz`) |
+| `--sift` / `--polyphen` | Scores from Ensembl cache | Scores from `--dbnsfp` if provided; flags control display format only |
+| `--domains` | Domain data from cache | Requires `--pfam FILE` and/or `--interpro FILE` |
+| `--fork N` | Perl `fork()` child processes | C++ `std::thread` with work-stealing; pre-buffers all input |
+| `--minimal` VCF output | Preserves original VCF alleles in output | Writes minimized alleles; insertion positions may shift +1 |
+| Plugin system | Rich Perl plugin ecosystem (~70+ plugins) | C++ shared library plugins (`.so`/`.dylib`); Perl plugins not compatible |
+| `filter_vep` regex | Full Perl regular expressions | Simple substring matching (`string::find`) |
+| HGVS multi-base duplications | Full `dup` notation | May use `ins` instead of `dup` for multi-base duplications |
+
+### Known Edge Cases
+
+Minor limitations that affect rare variant types:
+
+- **MNV multi-codon extraction**: Multi-nucleotide variants spanning multiple codons may have limited codon display (consequence determination is unaffected)
+- **UTR-intronic HGVSc**: Variants in UTR introns may have imprecise HGVS notation (very rare)
+- **Complex indel codon boundaries**: Complex indels spanning codon boundaries may show approximate codon changes (consequence type is correct)
+- **`-v` mode dash alleles**: The single-variant parser's `-` to `:` replacement can misparse dash-containing deletion alleles (use VCF input instead)
+
+### Perl VEP Compatibility Flags
+
+For pipeline compatibility, the following Perl VEP flags are **accepted without error** but have no effect: `--cache`, `--offline`, `--database`, `--merged`, `--refseq`, `--dir-cache`, `--cache-version`, `--host`, `--port`, `--user`, `--password`, `--registry-file`, `--db-version`, `--safe`, `--tmpdir`, `--dir`, `--force`, `--dont-skip`, `--lookup-ref`, `--failed`, `--no-whole-genome`, `--verbose`, `--show-cache-info`, `--shift-length`, `--shift-hgvs`, `--no-check-alleles`, `--exclude-null-alleles`, `--check-svs`, `--custom-multi-allelic`, `--max-sv-size`, `--no-check-variants-order`, `--overlap-cutoff`, `--af-exac`, `--hgvsg-use-accession`.
+
+This allows existing Perl VEP command lines to run without modification (unsupported flags are silently ignored).
+
 ## Custom Annotation Files
 
 You can add any VCF, BED, or bigWig file as a custom annotation source. There are two loading modes for VCF files, plus Perl VEP-compatible `--custom` syntax.

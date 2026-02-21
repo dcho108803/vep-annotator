@@ -4,7 +4,7 @@ A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VE
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![Tests](https://img.shields.io/badge/tests-80%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-640%20passing-brightgreen.svg)]()
 
 ## Features
 
@@ -87,10 +87,10 @@ make -j4
 - C++17 compiler (GCC 7+, Clang 5+)
 - CMake 3.16+
 - zlib
-- htslib (for tabix support)
 
 **Optional:**
-- libBigWig (for conservation bigWig files)
+- htslib (for tabix-indexed file support: `--annotation-tabix`, `--dbnsfp`, `--spliceai`, etc.)
+- libBigWig (for conservation bigWig files: `--phylop`, `--phastcons`, `--gerp`)
 
 **macOS:**
 ```bash
@@ -218,8 +218,13 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 | `--keep_csq` | Preserve existing VCF CSQ annotations |
 | `--no_intergenic` | Skip intergenic variants |
 | `--coding_only` | Only annotate coding transcripts |
+| `--exclude_predicted` | Exclude predicted (XM_/XR_) transcripts |
+| `--chr LIST` | Only annotate these chromosomes (comma-separated) |
 | `--distance N` | Upstream/downstream distance (default: 5000) |
 | `--assembly NAME` | Assembly name for output (default: GRCh38) |
+| `--synonyms FILE` | Chromosome synonym mapping file (tab-separated) |
+| `--config FILE` | Load options from config file (key=value format) |
+| `--stats_file FILE` | Write run statistics to file |
 
 ### Pathogenicity Predictions
 
@@ -291,6 +296,8 @@ Benchmarked against Perl VEP on the same variant sets:
 | 100K variants (JSON) | ~6.7 sec | ~6 min |
 | 100K variants (--everything) | ~6.9 sec | ~8 min |
 
+**Multi-threaded:** Use `--fork N` for parallel annotation with N threads. Input is pre-buffered and annotations are distributed across threads using atomic work-stealing for near-linear scaling.
+
 ### Memory Usage
 
 | Component | Memory |
@@ -306,7 +313,19 @@ Benchmarked against Perl VEP on the same variant sets:
 
 ## Testing
 
-The project includes 80 GoogleTest unit tests covering consequences, codon tables, HGVS parsing/generation, input format detection, and output formatting.
+The project includes 640 GoogleTest unit tests:
+
+| Test Suite | Tests | Coverage |
+|------------|------:|----------|
+| Consequences | 32 | SO terms, impact levels, ranking |
+| Codon Table | 24 | Translation, start/stop codons |
+| HGVS | 24 | Parsing, generation, notation types |
+| SpliceAI | 12 | Score parsing, cutoffs, thread safety |
+| Filter VEP | 180 | Operators, expressions, conditions, pipeline |
+| Output Writers | 153 | TSV/JSON/VCF formatting, escaping, stats |
+| Transcript Filter | 104 | Pick modes, filtering, ranking criteria |
+| CLI Utilities | 76 | Variant parsing, allele trimming, config parsing |
+| **Total** | **640** | |
 
 ```bash
 cd build
@@ -393,6 +412,14 @@ int main() {
     return 0;
 }
 ```
+
+### Performance Options
+
+| Option | Description |
+|--------|-------------|
+| `--fork N` | Use N parallel annotation threads |
+| `--buffer_size N` | Number of variants to buffer (default: 5000) |
+| `--quiet` | Suppress progress messages |
 
 ## Build Options
 

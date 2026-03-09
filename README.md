@@ -698,6 +698,10 @@ Use `--check_existing` to look up co-located variants from a VCF database (uses 
 
 This populates the `Existing_variation` column with variant IDs (e.g., rs numbers) from the database.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of all releases and changes.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

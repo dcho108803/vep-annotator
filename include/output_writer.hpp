@@ -863,7 +863,11 @@ private:
                     std::string pred = val.substr(0, paren);
                     std::string score = val.substr(paren + 1, val.size() - paren - 2);
                     json << "        \"sift_prediction\": \"" << escape_json(pred) << "\",\n";
-                    json << "        \"sift_score\": " << score << ",\n";
+                    if (is_valid_json_number(score)) {
+                        json << "        \"sift_score\": " << score << ",\n";
+                    } else {
+                        json << "        \"sift_score\": \"" << escape_json(score) << "\",\n";
+                    }
                 } else {
                     json << "        \"sift_prediction\": \"" << escape_json(val) << "\",\n";
                 }
@@ -880,7 +884,11 @@ private:
                     std::string pred = val.substr(0, paren);
                     std::string score = val.substr(paren + 1, val.size() - paren - 2);
                     json << "        \"polyphen_prediction\": \"" << escape_json(pred) << "\",\n";
-                    json << "        \"polyphen_score\": " << score << ",\n";
+                    if (is_valid_json_number(score)) {
+                        json << "        \"polyphen_score\": " << score << ",\n";
+                    } else {
+                        json << "        \"polyphen_score\": \"" << escape_json(score) << "\",\n";
+                    }
                 } else {
                     json << "        \"polyphen_prediction\": \"" << escape_json(val) << "\",\n";
                 }
@@ -927,7 +935,11 @@ private:
             }
             auto tsl_it = ann.custom_annotations.find("TSL");
             if (tsl_it != ann.custom_annotations.end() && !tsl_it->second.empty()) {
-                json << "        \"tsl\": " << tsl_it->second << ",\n";
+                if (is_valid_json_number(tsl_it->second)) {
+                    json << "        \"tsl\": " << tsl_it->second << ",\n";
+                } else {
+                    json << "        \"tsl\": \"" << escape_json(tsl_it->second) << "\",\n";
+                }
             }
             auto appris_it = ann.custom_annotations.find("APPRIS");
             if (appris_it != ann.custom_annotations.end() && !appris_it->second.empty()) {
@@ -961,15 +973,7 @@ private:
                 std::string key = pair.first;
                 for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                 // Try to output numeric values as numbers
-                bool is_numeric = !pair.second.empty();
-                bool has_dot = false;
-                for (size_t i = 0; i < pair.second.size(); ++i) {
-                    char c = pair.second[i];
-                    if (c == '-' && i == 0) continue;
-                    if (c == '.' && !has_dot) { has_dot = true; continue; }
-                    if (!std::isdigit(static_cast<unsigned char>(c))) { is_numeric = false; break; }
-                }
-                if (is_numeric && !pair.second.empty() && pair.second != "-" && pair.second != ".") {
+                if (is_valid_json_number(pair.second)) {
                     json << "        \"" << escape_json(key) << "\": " << pair.second << ",\n";
                 } else {
                     json << "        \"" << escape_json(key) << "\": \"" << escape_json(pair.second) << "\",\n";
@@ -998,6 +1002,29 @@ private:
         } else {
             output_ << s;
         }
+    }
+
+    /**
+     * Check if a string is a valid JSON number (guards against invalid raw output)
+     */
+    static bool is_valid_json_number(const std::string& s) {
+        if (s.empty()) return false;
+        size_t i = 0;
+        if (s[i] == '-') { ++i; if (i >= s.size()) return false; }
+        if (i >= s.size() || !std::isdigit(static_cast<unsigned char>(s[i]))) return false;
+        while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
+        if (i < s.size() && s[i] == '.') {
+            ++i;
+            if (i >= s.size() || !std::isdigit(static_cast<unsigned char>(s[i]))) return false;
+            while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
+        }
+        if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+            ++i;
+            if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i;
+            if (i >= s.size() || !std::isdigit(static_cast<unsigned char>(s[i]))) return false;
+            while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
+        }
+        return i == s.size();
     }
 
     static std::string escape_json(const std::string& s) {

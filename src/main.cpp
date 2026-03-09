@@ -1611,11 +1611,10 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
-            if (!quiet_mode && !config_args.empty()) {
-                std::cerr << "Loaded " << config_args.size() << " arguments from config: " << config_file_path << std::endl;
+            if (!config_args.empty()) {
+                std::cerr << "Warning: --config loaded " << config_args.size() << " arguments from " << config_file_path
+                          << " but config file support is not yet implemented. Use command-line flags instead." << std::endl;
             }
-            // Note: config file args are informational only - CLI args take precedence
-            // A full implementation would re-parse config_args before CLI args
         } else {
             std::cerr << "Warning: Cannot open config file: " << config_file_path << std::endl;
         }
@@ -2618,7 +2617,10 @@ int main(int argc, char* argv[]) {
                             !filter_config.exclude_consequences.empty();
                         // Use cached results from parallel pre-annotation, or annotate inline
                         if (!annotation_cache.empty()) {
-                            std::string cache_key = chrom + "\t" + std::to_string(ann_pos) + "\t" + ann_ref + "\t" + ann_alt;
+                            // Normalize dashes to empty for cache lookup (cache keys use empty strings)
+                            std::string cr = (ann_ref == "-") ? "" : ann_ref;
+                            std::string ca = (ann_alt == "-") ? "" : ann_alt;
+                            std::string cache_key = chrom + "\t" + std::to_string(ann_pos) + "\t" + cr + "\t" + ca;
                             auto cache_it = annotation_cache.find(cache_key);
                             if (cache_it != annotation_cache.end()) {
                                 annotations = cache_it->second;

@@ -83,7 +83,9 @@ void log(LogLevel level, const std::string& message) {
         default:                level_str = "UNKNOWN"; break;
     }
 
-    std::cerr << std::put_time(std::localtime(&time_t_now), "%Y-%m-%d %H:%M:%S")
+    struct tm time_buf;
+    localtime_r(&time_t_now, &time_buf);
+    std::cerr << std::put_time(&time_buf, "%Y-%m-%d %H:%M:%S")
               << " - " << level_str << " - " << message << std::endl;
 }
 

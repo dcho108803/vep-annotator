@@ -2056,7 +2056,7 @@ void VEPAnnotator::annotate_coding_region(
             int ref_len = static_cast<int>(ref.length());
             if (transcript.strand == '+') {
                 int cds_offset = cds_pos - 1;
-                if (cds_offset + ref_len <= static_cast<int>(cached_cds.length()))
+                if (cds_offset >= 0 && cds_offset + ref_len <= static_cast<int>(cached_cds.length()))
                     mut_cds = cached_cds.substr(0, cds_offset) + alt + cached_cds.substr(cds_offset + ref_len);
             } else {
                 std::string rc_alt = reverse_complement_sequence(alt);

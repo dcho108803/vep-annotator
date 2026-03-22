@@ -209,13 +209,9 @@ std::vector<std::map<std::string, std::string>> TabixTSVReader::query_range(
 
     // Try different chromosome formats
     std::vector<std::string> chrom_variants;
-    if (chrom.substr(0, 3) == "chr") {
-        chrom_variants.push_back(chrom);
-        chrom_variants.push_back(chrom.substr(3));
-    } else {
-        chrom_variants.push_back("chr" + chrom);
-        chrom_variants.push_back(chrom);
-    }
+    std::string stripped = normalize_chrom(chrom);
+    chrom_variants.push_back("chr" + stripped);
+    chrom_variants.push_back(stripped);
 
     for (const auto& try_chrom : chrom_variants) {
         std::string region = try_chrom + ":" + std::to_string(start) + "-" + std::to_string(end);
@@ -349,10 +345,8 @@ std::optional<double> BigWigReader::get_value(
     if (!pimpl_->valid) return std::nullopt;
 
     // Try different chromosome formats
-    std::vector<std::string> try_chroms = {chrom, "chr" + chrom};
-    if (chrom.substr(0, 3) == "chr") {
-        try_chroms.push_back(chrom.substr(3));
-    }
+    std::string stripped = normalize_chrom(chrom);
+    std::vector<std::string> try_chroms = {chrom, "chr" + stripped, stripped};
 
     for (const auto& try_chrom : try_chroms) {
         if (pimpl_->chrom_set.count(try_chrom) == 0) continue;
@@ -380,10 +374,8 @@ std::vector<double> BigWigReader::get_values(
 
     if (!pimpl_->valid) return results;
 
-    std::vector<std::string> try_chroms = {chrom, "chr" + chrom};
-    if (chrom.substr(0, 3) == "chr") {
-        try_chroms.push_back(chrom.substr(3));
-    }
+    std::string stripped = normalize_chrom(chrom);
+    std::vector<std::string> try_chroms = {chrom, "chr" + stripped, stripped};
 
     for (const auto& try_chrom : try_chroms) {
         if (pimpl_->chrom_set.count(try_chrom) == 0) continue;
@@ -412,10 +404,8 @@ std::optional<double> BigWigReader::get_mean(
 ) const {
     if (!pimpl_->valid) return std::nullopt;
 
-    std::vector<std::string> try_chroms = {chrom, "chr" + chrom};
-    if (chrom.substr(0, 3) == "chr") {
-        try_chroms.push_back(chrom.substr(3));
-    }
+    std::string stripped = normalize_chrom(chrom);
+    std::vector<std::string> try_chroms = {chrom, "chr" + stripped, stripped};
 
     for (const auto& try_chrom : try_chroms) {
         if (pimpl_->chrom_set.count(try_chrom) == 0) continue;
@@ -441,10 +431,8 @@ std::optional<double> BigWigReader::get_max(
 ) const {
     if (!pimpl_->valid) return std::nullopt;
 
-    std::vector<std::string> try_chroms = {chrom, "chr" + chrom};
-    if (chrom.substr(0, 3) == "chr") {
-        try_chroms.push_back(chrom.substr(3));
-    }
+    std::string stripped = normalize_chrom(chrom);
+    std::vector<std::string> try_chroms = {chrom, "chr" + stripped, stripped};
 
     for (const auto& try_chrom : try_chroms) {
         if (pimpl_->chrom_set.count(try_chrom) == 0) continue;
@@ -597,20 +585,24 @@ GFF3Database::GFF3Database(
         feat.source = fields[1];
         feat.type = type;
         try { feat.start = std::stoi(fields[3]); }
-        catch (...) { continue; }
+        catch (const std::invalid_argument&) { continue; }
+        catch (const std::out_of_range&) { continue; }
         try { feat.end = std::stoi(fields[4]); }
-        catch (...) { continue; }
+        catch (const std::invalid_argument&) { continue; }
+        catch (const std::out_of_range&) { continue; }
 
         if (fields[5] != ".") {
             try { feat.score = std::stod(fields[5]); }
-            catch (...) {}
+            catch (const std::invalid_argument&) {}
+            catch (const std::out_of_range&) {}
         }
 
         feat.strand = fields[6].empty() ? '.' : fields[6][0];
 
         if (fields[7] != ".") {
             try { feat.phase = std::stoi(fields[7]); }
-            catch (...) {}
+            catch (const std::invalid_argument&) {}
+            catch (const std::out_of_range&) {}
         }
 
         // Parse attributes

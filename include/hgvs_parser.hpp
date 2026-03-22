@@ -193,6 +193,8 @@ inline HGVSParseResult parse_genomic_hgvs(const std::string& reference, const st
     result.reference_id = reference;
     result.hgvs_type = HGVSType::GENOMIC;
 
+    try {
+
     // Parse substitution: 140753336A>T
     static const std::regex sub_regex("(\\d+)([ACGTacgt])>([ACGTacgt])");
     std::smatch match;
@@ -276,6 +278,12 @@ inline HGVSParseResult parse_genomic_hgvs(const std::string& reference, const st
 
     result.error_message = "Unrecognized genomic HGVS pattern: " + change;
     return result;
+
+    } catch (const std::out_of_range&) {
+        result.valid = false;
+        result.error_message = "Position value out of range in genomic HGVS: " + change;
+        return result;
+    }
 }
 
 /**
@@ -290,6 +298,8 @@ inline HGVSParseResult parse_coding_hgvs(const std::string& reference, const std
     HGVSParseResult result;
     result.reference_id = reference;
     result.hgvs_type = HGVSType::CODING;
+
+    try {
 
     // Parse substitution with optional intronic offset: 803C>T or 123+5G>A
     static const std::regex sub_regex("(-?\\*?\\d+)([+-]\\d+)?([ACGTacgt])>([ACGTacgt])");
@@ -423,6 +433,12 @@ inline HGVSParseResult parse_coding_hgvs(const std::string& reference, const std
 
     result.error_message = "Unrecognized coding HGVS pattern: " + change;
     return result;
+
+    } catch (const std::out_of_range&) {
+        result.valid = false;
+        result.error_message = "Position value out of range in coding HGVS: " + change;
+        return result;
+    }
 }
 
 /**
@@ -438,6 +454,8 @@ inline HGVSParseResult parse_protein_hgvs(const std::string& reference, const st
     HGVSParseResult result;
     result.reference_id = reference;
     result.hgvs_type = HGVSType::PROTEIN;
+
+    try {
 
     // Parse missense: Val600Glu or V600E
     // Three-letter: ([A-Z][a-z]{2})(\d+)([A-Z][a-z]{2})
@@ -537,6 +555,12 @@ inline HGVSParseResult parse_protein_hgvs(const std::string& reference, const st
 
     result.error_message = "Unrecognized protein HGVS pattern: " + change;
     return result;
+
+    } catch (const std::out_of_range&) {
+        result.valid = false;
+        result.error_message = "Position value out of range in protein HGVS: " + change;
+        return result;
+    }
 }
 
 /**

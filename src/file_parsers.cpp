@@ -24,6 +24,16 @@
 
 #include <zlib.h>
 
+namespace {
+struct GzFileGuard {
+    gzFile gz = nullptr;
+    ~GzFileGuard() { if (gz) gzclose(gz); }
+    GzFileGuard() = default;
+    GzFileGuard(const GzFileGuard&) = delete;
+    GzFileGuard& operator=(const GzFileGuard&) = delete;
+};
+} // anonymous namespace
+
 namespace vep {
 
 // ============================================================================
@@ -529,20 +539,20 @@ GFF3Database::GFF3Database(
     bool is_gzipped = (path.size() >= 3 && path.substr(path.size() - 3) == ".gz");
 
     std::function<bool(std::string&)> read_line;
-    gzFile gz = nullptr;
+    GzFileGuard gz_guard;
     std::ifstream file;
 
     if (is_gzipped) {
-        gz = gzopen(path.c_str(), "rb");
-        if (!gz) {
+        gz_guard.gz = gzopen(path.c_str(), "rb");
+        if (!gz_guard.gz) {
             log(LogLevel::ERROR, "Cannot open GFF3 file: " + path);
             return;
         }
 
         static constexpr size_t GZ_BUFFER_SIZE = 65536;
         char buffer[GZ_BUFFER_SIZE];
-        read_line = [&gz, &buffer](std::string& line) -> bool {
-            if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
+        read_line = [&gz_guard, &buffer](std::string& line) -> bool {
+            if (gzgets(gz_guard.gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
                 line.pop_back();
@@ -626,8 +636,6 @@ GFF3Database::GFF3Database(
 
         count++;
     }
-
-    if (gz) gzclose(gz);
 
     // Build all interval trees
     for (auto& [chrom, tree] : pimpl_->chrom_trees) {

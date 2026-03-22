@@ -16,6 +16,17 @@
 #include <iomanip>
 #include <zlib.h>
 
+namespace {
+// RAII wrapper for gzFile to prevent resource leaks on exceptions
+struct GzFileGuard {
+    gzFile gz = nullptr;
+    ~GzFileGuard() { if (gz) gzclose(gz); }
+    GzFileGuard() = default;
+    GzFileGuard(const GzFileGuard&) = delete;
+    GzFileGuard& operator=(const GzFileGuard&) = delete;
+};
+} // anonymous namespace
+
 // Tabix support via htslib (optional - compile with -DHAVE_HTSLIB)
 #ifdef HAVE_HTSLIB
 #include <htslib/hts.h>
@@ -695,18 +706,18 @@ void VCFAnnotationDatabase::add_source(const VCFAnnotationConfig& config) {
                        config.vcf_path.substr(config.vcf_path.size() - 3) == ".gz");
 
     std::function<bool(std::string&)> read_line;
-    gzFile gz = nullptr;
+    GzFileGuard gz_guard;
     std::ifstream file;
 
     if (is_gzipped) {
-        gz = gzopen(config.vcf_path.c_str(), "rb");
-        if (!gz) {
+        gz_guard.gz = gzopen(config.vcf_path.c_str(), "rb");
+        if (!gz_guard.gz) {
             throw std::runtime_error("Cannot open VCF file: " + config.vcf_path);
         }
 
         char buffer[GZ_READ_BUFFER_SIZE];
-        read_line = [&gz, &buffer](std::string& line) -> bool {
-            if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
+        read_line = [&gz_guard, &buffer](std::string& line) -> bool {
+            if (gzgets(gz_guard.gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
                 line.pop_back();
@@ -779,8 +790,6 @@ void VCFAnnotationDatabase::add_source(const VCFAnnotationConfig& config) {
             log(LogLevel::DEBUG, "Loaded " + std::to_string(record_count) + " records from " + config.name);
         }
     }
-
-    if (gz) gzclose(gz);
 
     pimpl_->record_counts[config.name] = record_count;
 
@@ -980,8 +989,9 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                        fasta_path.substr(fasta_path.size() - 3) == ".gz");
 
     if (is_gzipped) {
-        gzFile gz = gzopen(fasta_path.c_str(), "rb");
-        if (!gz) {
+        GzFileGuard gz_guard;
+        gz_guard.gz = gzopen(fasta_path.c_str(), "rb");
+        if (!gz_guard.gz) {
             throw std::runtime_error("Cannot open gzipped FASTA file: " + fasta_path);
         }
 
@@ -989,7 +999,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
         std::string current_seq;
         char buffer[FASTA_READ_BUFFER_SIZE];
 
-        while (gzgets(gz, buffer, sizeof(buffer)) != nullptr) {
+        while (gzgets(gz_guard.gz, buffer, sizeof(buffer)) != nullptr) {
             std::string line(buffer);
             // Remove trailing newline
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
@@ -1030,8 +1040,6 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
             pimpl_->sequences[current_chrom] = std::move(current_seq);
             pimpl_->lengths[current_chrom] = pimpl_->sequences[current_chrom].length();
         }
-
-        gzclose(gz);
     } else {
         std::ifstream file(fasta_path);
         if (!file.is_open()) {
@@ -1211,18 +1219,18 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
                        gtf_path.substr(gtf_path.size() - 3) == ".gz");
 
     std::function<bool(std::string&)> read_line;
-    gzFile gz = nullptr;
+    GzFileGuard gz_guard;
     std::ifstream file;
 
     if (is_gzipped) {
-        gz = gzopen(gtf_path.c_str(), "rb");
-        if (!gz) {
+        gz_guard.gz = gzopen(gtf_path.c_str(), "rb");
+        if (!gz_guard.gz) {
             throw std::runtime_error("Cannot open GTF file: " + gtf_path);
         }
 
         char buffer[GZ_READ_BUFFER_SIZE];
-        read_line = [&gz, &buffer](std::string& line) -> bool {
-            if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
+        read_line = [&gz_guard, &buffer](std::string& line) -> bool {
+            if (gzgets(gz_guard.gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
                 line.pop_back();
@@ -1439,8 +1447,6 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
             }
         }
     }
-
-    if (gz) gzclose(gz);
 
     // Sort exons and CDS regions by position
     for (auto& [tid, tr] : pimpl_->transcripts) {
@@ -1832,21 +1838,24 @@ VariantAnnotation VEPAnnotator::annotate_most_severe(
         return empty;
     }
 
-    // Sort by consequence severity using Perl VEP severity ranking
-    std::sort(all_annotations.begin(), all_annotations.end(),
-              [](const VariantAnnotation& a, const VariantAnnotation& b) {
-                  auto get_min_rank = [](const VariantAnnotation& ann) -> int {
-                      int min_val = 999;
-                      for (const auto& c : ann.consequences) {
-                          int v = get_consequence_rank(c);
-                          if (v < min_val) min_val = v;
-                      }
-                      return min_val;
-                  };
-                  return get_min_rank(a) < get_min_rank(b);
-              });
+    // Pre-compute consequence ranks to avoid redundant work during sort
+    std::vector<int> ranks(all_annotations.size());
+    for (size_t i = 0; i < all_annotations.size(); ++i) {
+        int min_val = 999;
+        for (const auto& c : all_annotations[i].consequences) {
+            int v = get_consequence_rank(c);
+            if (v < min_val) min_val = v;
+        }
+        ranks[i] = min_val;
+    }
 
-    return all_annotations[0];
+    // Find the annotation with the most severe consequence
+    size_t best = 0;
+    for (size_t i = 1; i < ranks.size(); ++i) {
+        if (ranks[i] < ranks[best]) best = i;
+    }
+
+    return std::move(all_annotations[best]);
 }
 
 // Forward declarations for static helper functions used by annotate_transcript
@@ -3463,12 +3472,12 @@ void annotate_vcf_file(
     bool is_gzipped = (vcf_input.length() > 3 &&
                        vcf_input.substr(vcf_input.length() - 3) == ".gz");
 
-    gzFile gz_file = nullptr;
+    GzFileGuard gz_guard;
     std::ifstream plain_file;
 
     if (is_gzipped) {
-        gz_file = gzopen(vcf_input.c_str(), "rb");
-        if (!gz_file) {
+        gz_guard.gz = gzopen(vcf_input.c_str(), "rb");
+        if (!gz_guard.gz) {
             throw std::runtime_error("Cannot open gzipped VCF file: " + vcf_input);
         }
         log(LogLevel::INFO, "Reading gzipped VCF file");
@@ -3481,7 +3490,6 @@ void annotate_vcf_file(
 
     std::ofstream output(output_path);
     if (!output.is_open()) {
-        if (gz_file) gzclose(gz_file);
         throw std::runtime_error("Cannot open output file: " + output_path);
     }
 
@@ -3502,7 +3510,7 @@ void annotate_vcf_file(
     // Helper lambda to read next line
     auto read_line = [&]() -> bool {
         if (is_gzipped) {
-            if (gzgets(gz_file, gz_buffer, sizeof(gz_buffer)) == nullptr) {
+            if (gzgets(gz_guard.gz, gz_buffer, sizeof(gz_buffer)) == nullptr) {
                 return false;
             }
             line = gz_buffer;
@@ -3562,11 +3570,6 @@ void annotate_vcf_file(
         if (variant_count % 1000 == 0) {
             log(LogLevel::INFO, "Processed " + std::to_string(variant_count) + " variants...");
         }
-    }
-
-    // Cleanup
-    if (gz_file) {
-        gzclose(gz_file);
     }
 
     log(LogLevel::INFO, "Annotation complete. " + std::to_string(variant_count) + " variants written to " + output_path);

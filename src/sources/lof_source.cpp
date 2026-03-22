@@ -339,7 +339,9 @@ public:
                 double score = std::stod(fields[1]);
                 scores_[gene] = score;
                 count++;
-            } catch (...) {
+            } catch (const std::invalid_argument&) {
+                continue;
+            } catch (const std::out_of_range&) {
                 continue;
             }
         }

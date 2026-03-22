@@ -92,7 +92,8 @@ public:
                 if (rf_it != record.end() && rf_it->second != ".") {
                     rf = std::stod(rf_it->second);
                 }
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
 
             double max_score = std::max(ada, rf);
             if (max_score > 0) {

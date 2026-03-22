@@ -911,7 +911,10 @@ inline SPDIParseResult parse_spdi(const std::string& spdi) {
     // Convert 0-based SPDI position to 1-based
     try {
         result.position = std::stoi(parts[1]) + 1;
-    } catch (...) {
+    } catch (const std::invalid_argument&) {
+        result.error_message = "Invalid SPDI position: " + parts[1];
+        return result;
+    } catch (const std::out_of_range&) {
         result.error_message = "Invalid SPDI position: " + parts[1];
         return result;
     }

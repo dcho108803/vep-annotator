@@ -338,7 +338,9 @@ inline StructuralVariant parse_sv_from_vcf(
     if (end_it != info.end()) {
         try {
             sv.end = std::stoi(end_it->second);
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
+            sv.end = pos;
+        } catch (const std::out_of_range&) {
             sv.end = pos;
         }
     } else {
@@ -355,7 +357,8 @@ inline StructuralVariant parse_sv_from_vcf(
     if (svlen_it != info.end()) {
         try {
             sv.sv_len = std::stoi(svlen_it->second);
-        } catch (...) {}
+        } catch (const std::invalid_argument&) {
+        } catch (const std::out_of_range&) {}
         // If END was not found, derive it from SVLEN
         if (end_it == info.end() && sv.sv_len != 0) {
             if (sv.sv_type == SVType::DEL) {
@@ -382,13 +385,15 @@ inline StructuralVariant parse_sv_from_vcf(
     if (cn_it != info.end()) {
         try {
             sv.copy_number = std::stoi(cn_it->second);
-        } catch (...) {}
+        } catch (const std::invalid_argument&) {
+        } catch (const std::out_of_range&) {}
     } else {
         // Try to parse from alt allele (e.g., <CN0>, <CN3>)
         if (alt.size() > 3 && alt.substr(0, 3) == "<CN") {
             try {
                 sv.copy_number = std::stoi(alt.substr(3, alt.size() - 4));
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
         }
     }
 
@@ -409,7 +414,8 @@ inline StructuralVariant parse_sv_from_vcf(
                 sv.bnd_mate_chrom = alt.substr(bracket_pos + 1, colon_pos - bracket_pos - 1);
                 try {
                     sv.bnd_mate_pos = std::stoi(alt.substr(colon_pos + 1, end_bracket - colon_pos - 1));
-                } catch (...) {}
+                } catch (const std::invalid_argument&) {
+                } catch (const std::out_of_range&) {}
             }
 
             sv.bnd_mate_forward = (alt.find('[') != std::string::npos);

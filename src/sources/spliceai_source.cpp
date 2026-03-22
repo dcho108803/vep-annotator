@@ -272,19 +272,19 @@ private:
 
         if (fields[2] != ".") {
             annotations["SpliceAI_pred_DS_AG"] = fields[2];
-            try { ds_ag = std::stod(fields[2]); } catch (...) {}
+            try { ds_ag = std::stod(fields[2]); } catch (const std::invalid_argument&) {} catch (const std::out_of_range&) {}
         }
         if (fields[3] != ".") {
             annotations["SpliceAI_pred_DS_AL"] = fields[3];
-            try { ds_al = std::stod(fields[3]); } catch (...) {}
+            try { ds_al = std::stod(fields[3]); } catch (const std::invalid_argument&) {} catch (const std::out_of_range&) {}
         }
         if (fields[4] != ".") {
             annotations["SpliceAI_pred_DS_DG"] = fields[4];
-            try { ds_dg = std::stod(fields[4]); } catch (...) {}
+            try { ds_dg = std::stod(fields[4]); } catch (const std::invalid_argument&) {} catch (const std::out_of_range&) {}
         }
         if (fields[5] != ".") {
             annotations["SpliceAI_pred_DS_DL"] = fields[5];
-            try { ds_dl = std::stod(fields[5]); } catch (...) {}
+            try { ds_dl = std::stod(fields[5]); } catch (const std::invalid_argument&) {} catch (const std::out_of_range&) {}
         }
         if (fields[6] != ".") annotations["SpliceAI_pred_DP_AG"] = fields[6];
         if (fields[7] != ".") annotations["SpliceAI_pred_DP_AL"] = fields[7];

@@ -27,6 +27,14 @@
 namespace vep {
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+static constexpr size_t GZ_READ_BUFFER_SIZE = 65536;
+static constexpr size_t FASTA_READ_BUFFER_SIZE = 8192;
+static constexpr size_t CHROMOSOME_RESERVE_SIZE = 300000000;  // ~300MB for human chromosomes
+
+// ============================================================================
 // Complement helper
 // ============================================================================
 
@@ -696,7 +704,7 @@ void VCFAnnotationDatabase::add_source(const VCFAnnotationConfig& config) {
             throw std::runtime_error("Cannot open VCF file: " + config.vcf_path);
         }
 
-        char buffer[65536];
+        char buffer[GZ_READ_BUFFER_SIZE];
         read_line = [&gz, &buffer](std::string& line) -> bool {
             if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
@@ -979,7 +987,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
 
         std::string current_chrom;
         std::string current_seq;
-        char buffer[8192];
+        char buffer[FASTA_READ_BUFFER_SIZE];
 
         while (gzgets(gz, buffer, sizeof(buffer)) != nullptr) {
             std::string line(buffer);
@@ -1009,7 +1017,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 current_chrom = normalize_chrom(current_chrom);
 
                 current_seq.clear();
-                current_seq.reserve(300000000);  // Reserve ~300MB for human chromosomes
+                current_seq.reserve(CHROMOSOME_RESERVE_SIZE);  // Reserve ~300MB for human chromosomes
             } else {
                 // Convert to uppercase
                 std::transform(line.begin(), line.end(), line.begin(), ::toupper);
@@ -1058,7 +1066,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 current_chrom = normalize_chrom(current_chrom);
 
                 current_seq.clear();
-                current_seq.reserve(300000000);
+                current_seq.reserve(CHROMOSOME_RESERVE_SIZE);
             } else {
                 std::transform(line.begin(), line.end(), line.begin(), ::toupper);
                 current_seq += line;
@@ -1212,7 +1220,7 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
             throw std::runtime_error("Cannot open GTF file: " + gtf_path);
         }
 
-        char buffer[65536];
+        char buffer[GZ_READ_BUFFER_SIZE];
         read_line = [&gz, &buffer](std::string& line) -> bool {
             if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
@@ -3489,7 +3497,7 @@ void annotate_vcf_file(
 
     std::string line;
     int variant_count = 0;
-    char gz_buffer[65536];
+    char gz_buffer[GZ_READ_BUFFER_SIZE];
 
     // Helper lambda to read next line
     auto read_line = [&]() -> bool {

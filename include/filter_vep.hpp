@@ -136,7 +136,8 @@ struct FilterableRecord {
     }
 
     bool has(const std::string& field) const {
-        return fields.count(field) > 0 && !fields.at(field).empty();
+        auto it = fields.find(field);
+        return it != fields.end() && !it->second.empty();
     }
 
     double get_numeric(const std::string& field) const {
@@ -146,7 +147,9 @@ struct FilterableRecord {
         }
         try {
             return std::stod(val);
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
+            return std::numeric_limits<double>::quiet_NaN();
+        } catch (const std::out_of_range&) {
             return std::numeric_limits<double>::quiet_NaN();
         }
     }
@@ -180,7 +183,9 @@ inline bool apply_condition(const FilterableRecord& record, const FilterConditio
         try {
             num_value = std::stod(value);
             num_target = std::stod(cond.value);
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
+            is_numeric = false;
+        } catch (const std::out_of_range&) {
             is_numeric = false;
         }
     }

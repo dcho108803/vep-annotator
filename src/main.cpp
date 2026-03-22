@@ -242,7 +242,8 @@ void post_process_annotations(std::vector<vep::VariantAnnotation>& annotations,
                                 max_af_pop = key.substr(colon_pos + 1);
                             }
                         }
-                    } catch (...) {}
+                    } catch (const std::invalid_argument&) {
+                    } catch (const std::out_of_range&) {}
                 }
             }
             if (max_af > 0.0) {
@@ -358,7 +359,9 @@ bool parse_variant(const std::string& variant, std::string& chrom, int& pos,
         ref = variant.substr(p2 + 1, p3 - p2 - 1);
         alt = variant.substr(p3 + 1);
         return true;
-    } catch (...) {
+    } catch (const std::invalid_argument&) {
+        return false;
+    } catch (const std::out_of_range&) {
         return false;
     }
 }
@@ -407,7 +410,8 @@ InputFormat detect_input_format(const std::string& line) {
                 std::stoi(f2);
                 std::stoi(f3);
                 return InputFormat::BED;
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
         }
     }
 
@@ -423,7 +427,8 @@ InputFormat detect_input_format(const std::string& line) {
                 if (f4.find('/') != std::string::npos) {
                     return InputFormat::ENSEMBL;
                 }
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
         }
     }
 
@@ -440,7 +445,8 @@ bool parse_ensembl_line(const std::string& line, std::string& chrom, int& pos,
 
     try {
         pos = std::stoi(start_str);
-    } catch (...) { return false; }
+    } catch (const std::invalid_argument&) { return false;
+    } catch (const std::out_of_range&) { return false; }
 
     // Parse alleles: REF/ALT
     size_t slash = alleles.find('/');
@@ -469,7 +475,8 @@ bool parse_bed_line(const std::string& line, std::string& chrom, int& pos,
         pos = start + 1;  // BED is 0-based, convert to 1-based
         ref = "-";
         alt = "-";
-    } catch (...) { return false; }
+    } catch (const std::invalid_argument&) { return false;
+    } catch (const std::out_of_range&) { return false; }
 
     return true;
 }
@@ -555,7 +562,8 @@ public:
             try {
                 iv.start = std::stoi(start_s);
                 iv.end = std::stoi(end_s);
-            } catch (...) { continue; }
+            } catch (const std::invalid_argument&) { continue;
+            } catch (const std::out_of_range&) { continue; }
 
             std::string field;
             if (iss >> field) iv.name = field;
@@ -637,8 +645,8 @@ public:
 
 // Read a complete line from gzFile, handling lines longer than a fixed buffer
 std::string gz_read_line(gzFile gz, bool& eof) {
-    const int CHUNK = 65536;
-    char buf[65536];
+    static constexpr int CHUNK = 65536;
+    char buf[CHUNK];
     std::string result;
     while (true) {
         if (gzgets(gz, buf, CHUNK) == nullptr) {
@@ -776,12 +784,16 @@ int main(int argc, char* argv[]) {
     // Config file
     std::string config_file_path;  // --config FILE
 
+    // Track ignored Perl VEP flags for warning
+    std::vector<std::string> ignored_flags;
+
     // Stats file
     std::string stats_file_path;  // --stats-file FILE
 
     // Phase A: distance, variant-class
-    int upstream_distance = 5000;
-    int downstream_distance = 5000;
+    static constexpr int DEFAULT_DISTANCE = 5000;
+    int upstream_distance = DEFAULT_DISTANCE;
+    int downstream_distance = DEFAULT_DISTANCE;
     bool show_variant_class = false;
 
     // Phase B: new CLI flags
@@ -958,7 +970,8 @@ int main(int argc, char* argv[]) {
             filter_config.freq_pop = argv[++i];
         } else if (arg == "--freq-threshold" && i + 1 < argc) {
             try { filter_config.freq_threshold = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Warning: invalid --freq-threshold value, using default\n"; }
+            catch (const std::invalid_argument&) { std::cerr << "Warning: invalid --freq-threshold value, using default\n"; }
+            catch (const std::out_of_range&) { std::cerr << "Warning: invalid --freq-threshold value, using default\n"; }
         } else if (arg == "--freq-gt") {
             filter_config.freq_gt = true;
         }
@@ -1069,7 +1082,8 @@ int main(int argc, char* argv[]) {
             spliceai_indel_path = argv[++i];
         } else if (arg == "--spliceai-cutoff" && i + 1 < argc) {
             try { spliceai_cutoff = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Warning: invalid --spliceai-cutoff value, ignored\n"; }
+            catch (const std::invalid_argument&) { std::cerr << "Warning: invalid --spliceai-cutoff value, ignored\n"; }
+            catch (const std::out_of_range&) { std::cerr << "Warning: invalid --spliceai-cutoff value, ignored\n"; }
         } else if (arg == "--maxentscan") {
             use_maxentscan = true;
         } else if (arg == "--dbscsnv" && i + 1 < argc) {
@@ -1130,7 +1144,9 @@ int main(int argc, char* argv[]) {
                         if (key == "snv") spliceai_snv_path = val;
                         else if (key == "indel") spliceai_indel_path = val;
                         else if (key == "cutoff") {
-                            try { spliceai_cutoff = std::stod(val); } catch (...) {}
+                            try { spliceai_cutoff = std::stod(val); }
+                            catch (const std::invalid_argument&) {}
+                            catch (const std::out_of_range&) {}
                         }
                     }
                 }
@@ -1252,7 +1268,8 @@ int main(int argc, char* argv[]) {
                     upstream_distance = std::stoi(dist_str);
                     downstream_distance = upstream_distance;
                 }
-            } catch (...) { std::cerr << "Warning: invalid --distance value, using default\n"; }
+            } catch (const std::invalid_argument&) { std::cerr << "Warning: invalid --distance value, using default\n";
+            } catch (const std::out_of_range&) { std::cerr << "Warning: invalid --distance value, using default\n"; }
         }
         // Variant class (Phase A4)
         else if (arg == "--variant-class") {
@@ -1363,7 +1380,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Note: --format " << fmt << " accepted; only VCF is supported for batch input." << std::endl;
             }
         } else if (arg == "--force-overwrite") {
-            // No-op: C++ always overwrites output files
+            ignored_flags.push_back(arg);
         } else if (arg == "--symbol") {
             show_gene_symbol = true;  // Gene symbol is always shown; no-op
         } else if (arg == "--protein") {
@@ -1404,15 +1421,15 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--no-stats") {
             show_stats = false;
         } else if (arg == "--lookup-ref") {
-            // No-op: C++ always uses FASTA reference
+            ignored_flags.push_back(arg);
         } else if (arg == "--failed") {
-            // No-op: C++ processes all variants
+            ignored_flags.push_back(arg);
         } else if (arg == "--cache" || arg == "--offline") {
-            // No-op: C++ always runs offline with GTF+FASTA
+            ignored_flags.push_back(arg);
         } else if (arg == "--dir-cache" && i + 1 < argc) {
-            ++i; // Skip value, no-op
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--database" || arg == "--merged" || arg == "--refseq") {
-            // No-op: Perl-specific modes
+            ignored_flags.push_back(arg);
         } else if (arg == "--input-data" && i + 1 < argc) {
             // Read variant data from string (Perl VEP compat)
             vcf_path = "-";  // Treated as stdin later
@@ -1420,7 +1437,8 @@ int main(int argc, char* argv[]) {
             ++i;
         } else if (arg == "--fork" && i + 1 < argc) {
             try { fork_count = std::stoi(argv[++i]); }
-            catch (...) { fork_count = 1; }
+            catch (const std::invalid_argument&) { fork_count = 1; }
+            catch (const std::out_of_range&) { fork_count = 1; }
             if (fork_count < 1) fork_count = 1;
         } else if (arg == "--individual" && i + 1 < argc) {
             individual = argv[++i];
@@ -1430,37 +1448,37 @@ int main(int argc, char* argv[]) {
             // --check-existing without argument - just enable the flag
             check_existing = true;
         } else if (arg == "--pubmed") {
-            // No-op: requires variant database
+            ignored_flags.push_back(arg);
         } else if (arg == "--var-synonyms") {
-            // No-op: requires variant database
+            ignored_flags.push_back(arg);
         } else if (arg == "--gene-phenotype") {
-            // No-op: requires phenotype database
+            ignored_flags.push_back(arg);
         } else if (arg == "--clin-sig-allele") {
-            // No-op: accepted for compat
+            ignored_flags.push_back(arg);
         } else if (arg == "--no-check-alleles") {
-            // No-op: accepted for compat
+            ignored_flags.push_back(arg);
         } else if (arg == "--exclude-null-alleles") {
-            // No-op: accepted for compat
+            ignored_flags.push_back(arg);
         } else if (arg == "--check-svs") {
-            // No-op: accepted for compat
+            ignored_flags.push_back(arg);
         } else if (arg == "--safe") {
-            // No-op: Perl-specific
+            ignored_flags.push_back(arg);
         } else if (arg == "--tmpdir" && i + 1 < argc) {
-            ++i; // No-op: Perl-specific
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--dir" && i + 1 < argc) {
-            ++i; // No-op: Perl-specific
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--dir-plugins" && i + 1 < argc) {
             plugin_dirs.push_back(argv[++i]);
         } else if (arg == "--registry-file" && i + 1 < argc) {
-            ++i; // No-op: Perl-specific
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--host" && i + 1 < argc) {
-            ++i; // No-op: database mode
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--port" && i + 1 < argc) {
-            ++i; // No-op: database mode
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--user" && i + 1 < argc) {
-            ++i; // No-op: database mode
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--password" && i + 1 < argc) {
-            ++i; // No-op: database mode
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--warning-file" && i + 1 < argc) {
             ++i; // Accept but don't implement
         } else if (arg == "--stats-file" && i + 1 < argc) {
@@ -1471,23 +1489,23 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--config" && i + 1 < argc) {
             config_file_path = argv[++i];
         } else if (arg == "--verbose") {
-            // No-op: Perl-specific verbosity
+            ignored_flags.push_back(arg);
         } else if (arg == "--compress-output" && i + 1 < argc) {
-            ++i; // No-op: output compression (e.g., gzip)
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--uploaded-allele") {
-            // No-op: show uploaded allele
+            ignored_flags.push_back(arg);
         } else if (arg == "--mirna") {
-            // No-op: miRNA structure annotation (Perl plugin)
+            ignored_flags.push_back(arg);
         } else if (arg == "--shift-length") {
-            // No-op: already handled by C++ 3' shifting
+            ignored_flags.push_back(arg);
         } else if (arg == "--shift-hgvs" && i + 1 < argc) {
-            ++i; // No-op: HGVS shifting control (C++ always shifts)
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--hgvsg-use-accession") {
-            // No-op: use accession numbers in HGVSg
+            ignored_flags.push_back(arg);
         } else if (arg == "--ga4gh-vrs") {
-            // No-op: GA4GH VRS format output
+            ignored_flags.push_back(arg);
         } else if (arg == "--gene-version") {
-            // No-op: include gene version in output
+            ignored_flags.push_back(arg);
         } else if (arg == "--synonyms" && i + 1 < argc) {
             synonyms_path = argv[++i];
         } else if (arg == "--chr" && i + 1 < argc) {
@@ -1509,65 +1527,65 @@ int main(int argc, char* argv[]) {
                 }
             }
         } else if (arg == "--transcript-filter" && i + 1 < argc) {
-            ++i; // No-op: Perl-style transcript filter expression
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--exclude-predicted") {
             exclude_predicted = true;
         } else if (arg == "--gencode-primary") {
             filter_config.gencode_basic = true;  // GENCODE primary = GENCODE basic
         } else if (arg == "--custom-multi-allelic") {
-            // No-op: handle multi-allelic custom annotations
+            ignored_flags.push_back(arg);
         } else if (arg == "--max-sv-size" && i + 1 < argc) {
-            ++i; // No-op: max structural variant size
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--no-check-variants-order") {
-            // No-op: skip variant order check
+            ignored_flags.push_back(arg);
         } else if (arg == "--individual-zyg") {
-            // No-op: individual zygosity reporting
+            ignored_flags.push_back(arg);
         } else if (arg == "--skipped-variants-file" && i + 1 < argc) {
-            ++i; // No-op: write skipped variants to file
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--freq-filter" && i + 1 < argc) {
-            ++i; // No-op: frequency-based filter (exclude/include)
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--freq-freq" && i + 1 < argc) {
-            ++i; // No-op: frequency threshold for freq_filter
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--freq-gt-lt" && i + 1 < argc) {
-            ++i; // No-op: gt or lt for freq_filter
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--force") {
-            // No-op: C++ always overwrites output (--force-overwrite handled above)
+            ignored_flags.push_back(arg);
         } else if (arg == "--no-whole-genome") {
-            // No-op: Perl-specific optimization
+            ignored_flags.push_back(arg);
         } else if (arg == "--flag-gencode-primary") {
             show_biotype = true;  // Flag GENCODE primary in output via BIOTYPE display
         } else if (arg == "--clinvar-somatic-classification") {
-            // No-op: ClinVar somatic classification
+            ignored_flags.push_back(arg);
         } else if (arg == "--af-exac") {
-            // No-op: ExAC frequencies (deprecated, use gnomAD)
+            ignored_flags.push_back(arg);
         } else if (arg == "--show-cache-info") {
-            // No-op: display cache metadata (no cache in C++)
+            ignored_flags.push_back(arg);
         } else if (arg == "--cache-version" && i + 1 < argc) {
-            ++i; // No-op: cache version
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--lrg") {
-            // No-op: LRG coordinate mapping
+            ignored_flags.push_back(arg);
         } else if (arg == "--ambiguous-hgvs") {
-            // No-op: allow ambiguous protein HGVS
+            ignored_flags.push_back(arg);
         } else if (arg == "--hgvsp-use-prediction") {
-            // No-op: HGVSp predicted format
+            ignored_flags.push_back(arg);
         } else if (arg == "--use-transcript-ref") {
-            // No-op: use transcript-derived reference
+            ignored_flags.push_back(arg);
         } else if (arg == "--bam" && i + 1 < argc) {
-            ++i; // No-op: BAM for transcript model correction
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--genomes") {
-            // No-op: Ensembl Genomes database settings
+            ignored_flags.push_back(arg);
         } else if (arg == "--is-multispecies") {
-            // No-op: multi-species EnsemblGenomes databases
+            ignored_flags.push_back(arg);
         } else if (arg == "--db-version" && i + 1 < argc) {
-            ++i; // No-op: Ensembl database version
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--registry" && i + 1 < argc) {
-            ++i; // No-op: Ensembl registry file
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--stats-html") {
-            // No-op: HTML stats file (default behavior)
+            ignored_flags.push_back(arg);
         } else if (arg == "--overlap-cutoff" && i + 1 < argc) {
-            ++i; // No-op: minimum overlap percentage for --custom
+            ++i; ignored_flags.push_back(arg);
         } else if (arg == "--pass" && i + 1 < argc) {
-            ++i; // No-op: alias for --password
+            ++i; ignored_flags.push_back(arg);
         }
         // Unknown option
         else {
@@ -1575,6 +1593,15 @@ int main(int argc, char* argv[]) {
             print_usage(argv[0]);
             return 1;
         }
+    }
+
+    // Warn about ignored Perl VEP compatibility flags
+    if (!ignored_flags.empty() && !quiet_mode) {
+        std::cerr << "Warning: the following Perl VEP flags are not supported and were ignored:";
+        for (const auto& f : ignored_flags) {
+            std::cerr << " " << f;
+        }
+        std::cerr << std::endl;
     }
 
     // Load config file if specified (applies settings as defaults)
@@ -2196,7 +2223,8 @@ int main(int argc, char* argv[]) {
                     std::string q_chrom = bl.substr(0, t1);
                     int q_pos = 0;
                     try { q_pos = std::stoi(bl.substr(t1 + 1, t2 - t1 - 1)); }
-                    catch (...) { continue; }
+                    catch (const std::invalid_argument&) { continue; }
+                    catch (const std::out_of_range&) { continue; }
                     std::string q_ref = bl.substr(t3 + 1, t4 - t3 - 1);
                     size_t t5 = bl.find('\t', t4 + 1);
                     std::string q_alt_str = (t5 != std::string::npos)

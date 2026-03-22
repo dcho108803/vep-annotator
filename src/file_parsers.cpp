@@ -539,7 +539,8 @@ GFF3Database::GFF3Database(
             return;
         }
 
-        char buffer[65536];
+        static constexpr size_t GZ_BUFFER_SIZE = 65536;
+        char buffer[GZ_BUFFER_SIZE];
         read_line = [&gz, &buffer](std::string& line) -> bool {
             if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;

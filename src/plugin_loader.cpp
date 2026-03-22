@@ -184,8 +184,8 @@ void PluginLoader::unload_plugin(LoadedPlugin& p) {
     if (p.plugin && p.destroy_func) {
         try {
             p.destroy_func(p.plugin);
-        } catch (...) {
-            log(LogLevel::WARNING, "Plugin destruction failed: " + p.path);
+        } catch (const std::exception& e) {
+            log(LogLevel::WARNING, "Plugin destruction failed: " + p.path + ": " + e.what());
         }
     }
     if (p.handle) {

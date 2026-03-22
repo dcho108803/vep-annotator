@@ -318,7 +318,8 @@ private:
         if (tsl_it != ann.custom_annotations.end()) {
             try {
                 ext.tsl = std::stoi(tsl_it->second);
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
         }
 
         auto appris_it = ann.custom_annotations.find("APPRIS");
@@ -335,7 +336,8 @@ private:
         if (tl_it != ann.custom_annotations.end() && !tl_it->second.empty()) {
             try {
                 ext.transcript_length = std::stoi(tl_it->second);
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
         }
 
         return ext;
@@ -445,7 +447,8 @@ private:
                                 (freq > config_.freq_threshold) :
                                 (freq < config_.freq_threshold);
                             return !passes;
-                        } catch (...) {}
+                        } catch (const std::invalid_argument&) {
+                        } catch (const std::out_of_range&) {}
                     }
                     return false;
                 }),

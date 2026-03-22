@@ -220,7 +220,9 @@ protected:
         try {
             entry.aa_start = std::stoi(fields[1]);
             entry.aa_end = std::stoi(fields[2]);
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
+            return;
+        } catch (const std::out_of_range&) {
             return;
         }
 
@@ -229,7 +231,8 @@ protected:
         if (fields.size() > 5) {
             try {
                 entry.evalue = std::stod(fields[5]);
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
         }
 
         domains_[entry.transcript_id].push_back(entry);
@@ -258,7 +261,9 @@ protected:
         try {
             entry.aa_start = std::stoi(fields[1]);
             entry.aa_end = std::stoi(fields[2]);
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
+            return;
+        } catch (const std::out_of_range&) {
             return;
         }
 
@@ -273,7 +278,8 @@ protected:
                 try {
                     entry.evalue = std::stod(fields[i]);
                     break;
-                } catch (...) {}
+                } catch (const std::invalid_argument&) {
+                } catch (const std::out_of_range&) {}
             }
         }
 
@@ -303,7 +309,9 @@ protected:
         try {
             entry.aa_start = std::stoi(fields[6]);
             entry.aa_end = std::stoi(fields[7]);
-        } catch (...) {
+        } catch (const std::invalid_argument&) {
+            return;
+        } catch (const std::out_of_range&) {
             return;
         }
 
@@ -320,7 +328,8 @@ protected:
         if (fields.size() > 8 && fields[8] != "-") {
             try {
                 entry.evalue = std::stod(fields[8]);
-            } catch (...) {}
+            } catch (const std::invalid_argument&) {
+            } catch (const std::out_of_range&) {}
         }
 
         domains_[entry.transcript_id].push_back(entry);

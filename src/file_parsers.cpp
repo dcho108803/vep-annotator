@@ -887,9 +887,15 @@ void AnnotationSourceManager::annotate_all(
         if (disabled_.count(source->name()) != 0) continue;
 
         if (!source->is_ready()) {
-            // Initialize on first use
+            // Initialize on first use - upgrade to unique lock to prevent
+            // concurrent initialization by multiple threads
             lock.unlock();
-            source->initialize();
+            {
+                std::unique_lock<std::shared_mutex> write_lock(mutex_);
+                if (!source->is_ready()) {  // Double-check after acquiring exclusive lock
+                    source->initialize();
+                }
+            }
             lock.lock();
         }
 

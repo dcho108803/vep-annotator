@@ -244,7 +244,7 @@ int main(int argc, char* argv[]) {
 
         vep::FilterableRecord record = vep::parse_tsv_record(line, col_map);
 
-        // Apply --pick filter
+        // Apply --pick filter (keep only first passing record per variant)
         if (config.pick_one) {
             std::string variant_key = record.get("CHROM") + ":" +
                                       record.get("POS") + ":" +
@@ -264,10 +264,10 @@ int main(int argc, char* argv[]) {
 
             if (vep::apply_filter(record, config)) {
                 seen_variants.insert(variant_key);
+                if (!count_only) output << line << "\n";
+                lines_passed++;
             }
-        }
-
-        if (vep::apply_filter(record, config)) {
+        } else if (vep::apply_filter(record, config)) {
             if (!count_only) output << line << "\n";
             lines_passed++;
         }

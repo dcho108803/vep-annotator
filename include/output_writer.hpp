@@ -18,6 +18,7 @@
 #include <set>
 #include <sstream>
 #include <cctype>
+#include <cstdio>
 #include <zlib.h>
 
 namespace vep {
@@ -1040,7 +1041,16 @@ private:
                 case '\n': result += "\\n"; break;
                 case '\r': result += "\\r"; break;
                 case '\t': result += "\\t"; break;
-                default: result += c; break;
+                default:
+                    if (static_cast<unsigned char>(c) < 0x20) {
+                        // JSON requires all control characters to be escaped
+                        char buf[7];
+                        snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                        result += buf;
+                    } else {
+                        result += c;
+                    }
+                    break;
             }
         }
         return result;

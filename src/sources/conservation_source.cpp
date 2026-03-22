@@ -10,6 +10,7 @@
 #include "annotation_source.hpp"
 #include "file_parsers.hpp"
 #include "vep_annotator.hpp"
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 
@@ -78,7 +79,7 @@ public:
         } else {
             // For indels, get mean score across affected region
             int start = pos;
-            int end = pos + static_cast<int>(ref.length()) - 1;
+            int end = pos + std::max(static_cast<int>(ref.length()), 1) - 1;
 
             auto mean = reader_->get_mean(chrom, start, end);
             if (mean.has_value()) {

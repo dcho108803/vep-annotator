@@ -22,6 +22,24 @@
 namespace vep {
 
 /**
+ * Trim whitespace from both ends of a string in-place (O(n))
+ */
+inline void trim_inplace(std::string& s) {
+    // Trim trailing
+    auto end = s.find_last_not_of(" \t\n\r\f\v");
+    if (end == std::string::npos) {
+        s.clear();
+        return;
+    }
+    s.erase(end + 1);
+    // Trim leading
+    auto start = s.find_first_not_of(" \t\n\r\f\v");
+    if (start > 0) {
+        s.erase(0, start);
+    }
+}
+
+/**
  * Filter operators
  */
 enum class FilterOperator {
@@ -447,13 +465,7 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
 
     // Extract field
     cond.field = expr.substr(0, op_pos);
-    // Trim whitespace
-    while (!cond.field.empty() && std::isspace(cond.field[cond.field.size() - 1])) {
-        cond.field.erase(cond.field.size() - 1);
-    }
-    while (!cond.field.empty() && std::isspace(cond.field[0])) {
-        cond.field.erase(0, 1);
-    }
+    trim_inplace(cond.field);
 
     // Handle "not" prefix
     if (cond.field.size() > 4 && cond.field.substr(0, 4) == "not ") {
@@ -463,39 +475,21 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
 
     // Parse operator
     std::string op_str = found_op;
-    // Trim whitespace
-    while (!op_str.empty() && std::isspace(op_str[op_str.size() - 1])) {
-        op_str.erase(op_str.size() - 1);
-    }
-    while (!op_str.empty() && std::isspace(op_str[0])) {
-        op_str.erase(0, 1);
-    }
+    trim_inplace(op_str);
 
     cond.op = parse_filter_operator(op_str);
 
     // Extract value
     if (op_pos + found_op.size() < expr.size()) {
         cond.value = expr.substr(op_pos + found_op.size());
-        // Trim whitespace
-        while (!cond.value.empty() && std::isspace(cond.value[cond.value.size() - 1])) {
-            cond.value.erase(cond.value.size() - 1);
-        }
-        while (!cond.value.empty() && std::isspace(cond.value[0])) {
-            cond.value.erase(0, 1);
-        }
+        trim_inplace(cond.value);
 
         // Handle IN operator - parse comma-separated list
         if (cond.op == FilterOperator::IN || cond.op == FilterOperator::NOT_IN) {
             std::istringstream iss(cond.value);
             std::string item;
             while (std::getline(iss, item, ',')) {
-                // Trim whitespace
-                while (!item.empty() && std::isspace(item[item.size() - 1])) {
-                    item.erase(item.size() - 1);
-                }
-                while (!item.empty() && std::isspace(item[0])) {
-                    item.erase(0, 1);
-                }
+                trim_inplace(item);
                 if (!item.empty()) {
                     cond.value_list.push_back(item);
                 }
@@ -522,13 +516,7 @@ inline std::set<std::string> load_gene_list(const std::string& filepath) {
         // Skip comments and empty lines
         if (line.empty() || line[0] == '#') continue;
 
-        // Trim whitespace
-        while (!line.empty() && std::isspace(line[line.size() - 1])) {
-            line.erase(line.size() - 1);
-        }
-        while (!line.empty() && std::isspace(line[0])) {
-            line.erase(0, 1);
-        }
+        trim_inplace(line);
 
         if (!line.empty()) {
             // Handle TSV format (take first column)

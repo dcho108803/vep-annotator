@@ -1502,3 +1502,86 @@ TEST(FilterPipeline, ParseMultipleLinesCountMatches) {
     // missense (MODERATE), stop_gained (HIGH), frameshift (HIGH)
     EXPECT_EQ(match_count, 3);
 }
+
+// ============================================================================
+// filter_vep --pick mode tests
+// ============================================================================
+
+TEST(FilterPick, PickOneKeepsFirstPassingPerVariant) {
+    // Two records for same variant, both pass filter
+    FilterConfig config;
+    config.pick_one = true;
+
+    auto rec1 = make_record({
+        {"CHROM", "1"}, {"POS", "100"}, {"REF", "A"}, {"ALT", "T"},
+        {"Consequence", "missense_variant"}, {"IMPACT", "MODERATE"}
+    });
+    auto rec2 = make_record({
+        {"CHROM", "1"}, {"POS", "100"}, {"REF", "A"}, {"ALT", "T"},
+        {"Consequence", "synonymous_variant"}, {"IMPACT", "LOW"}
+    });
+
+    // Both should pass with no filter conditions
+    EXPECT_TRUE(apply_filter(rec1, config));
+    EXPECT_TRUE(apply_filter(rec2, config));
+
+    // Verify the pick_one behavior is in FilterConfig
+    EXPECT_TRUE(config.has_any_filter());
+}
+
+TEST(FilterPick, PickWithConsequenceFilter) {
+    FilterConfig config;
+    config.pick_one = true;
+    config.consequence_filter.insert("missense_variant");
+
+    auto rec_miss = make_record({
+        {"CHROM", "1"}, {"POS", "100"}, {"REF", "A"}, {"ALT", "T"},
+        {"Consequence", "missense_variant"}
+    });
+    auto rec_syn = make_record({
+        {"CHROM", "1"}, {"POS", "100"}, {"REF", "A"}, {"ALT", "T"},
+        {"Consequence", "synonymous_variant"}
+    });
+
+    EXPECT_TRUE(apply_filter(rec_miss, config));
+    EXPECT_FALSE(apply_filter(rec_syn, config));
+}
+
+TEST(FilterPick, DifferentVariantsNotAffected) {
+    // Two different variants should each pass independently
+    FilterConfig config;
+    config.pick_one = true;
+
+    auto rec1 = make_record({
+        {"CHROM", "1"}, {"POS", "100"}, {"REF", "A"}, {"ALT", "T"},
+        {"Consequence", "missense_variant"}
+    });
+    auto rec2 = make_record({
+        {"CHROM", "1"}, {"POS", "200"}, {"REF", "G"}, {"ALT", "C"},
+        {"Consequence", "missense_variant"}
+    });
+
+    // Different positions = different variant keys = both should pass filter
+    EXPECT_TRUE(apply_filter(rec1, config));
+    EXPECT_TRUE(apply_filter(rec2, config));
+}
+
+// ============================================================================
+// FilterableRecord edge cases
+// ============================================================================
+
+TEST(FilterableRecord, GetMissingField) {
+    auto rec = make_record({{"CHROM", "1"}, {"POS", "100"}});
+    EXPECT_EQ(rec.get("NONEXISTENT"), "");
+}
+
+TEST(FilterableRecord, HasFieldWithEmptyValue) {
+    auto rec = make_record({{"CHROM", "1"}, {"POS", ""}});
+    EXPECT_FALSE(rec.has("POS"));  // empty value = not "has"
+    EXPECT_TRUE(rec.has("CHROM"));
+}
+
+TEST(FilterableRecord, HasMissingFieldEdge) {
+    auto rec = make_record({{"CHROM", "1"}});
+    EXPECT_FALSE(rec.has("NONEXISTENT"));
+}

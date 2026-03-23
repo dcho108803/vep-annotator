@@ -223,6 +223,8 @@ if(BUILD_TESTS)
         tests/test_cli.cpp
         tests/test_transcript_filter.cpp
         tests/test_output.cpp
+        tests/test_structural_variant.cpp
+        tests/test_exon_intron.cpp
     )
     target_link_libraries(vep_tests
         PRIVATE

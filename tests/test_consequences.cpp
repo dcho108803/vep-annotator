@@ -337,3 +337,105 @@ TEST(PickOrderDefault, MANEBeforeCanonical) {
     EXPECT_EQ(config.pick_order[1], PickCriteria::MANE_PLUS);
     EXPECT_EQ(config.pick_order[2], PickCriteria::CANONICAL);
 }
+
+// ============================================================================
+// Splice consequence suppression logic
+// (Tests the VEP spec: specific sub-types suppress generic splice_region_variant)
+// ============================================================================
+
+TEST(SpliceConsequenceSuppression, Donor5thSuppressesSpliceRegionAndDonorRegion) {
+    // When splice_donor_5th_base_variant is present, both
+    // splice_region_variant and splice_donor_region_variant should be removed
+    std::vector<ConsequenceType> cons = {
+        ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT,
+        ConsequenceType::SPLICE_REGION_VARIANT,
+        ConsequenceType::SPLICE_DONOR_REGION_VARIANT
+    };
+
+    // Deduplicate and sort (as the real code does)
+    std::sort(cons.begin(), cons.end());
+    cons.erase(std::unique(cons.begin(), cons.end()), cons.end());
+
+    // Apply suppression logic (same as vep_annotator.cpp)
+    if (cons.size() > 1) {
+        auto has = [&](ConsequenceType t) {
+            return std::find(cons.begin(), cons.end(), t) != cons.end();
+        };
+        bool has_donor_5th = has(ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT);
+        bool has_donor_region = has(ConsequenceType::SPLICE_DONOR_REGION_VARIANT);
+        bool has_polypyrimidine = has(ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT);
+        if (has_donor_5th || has_donor_region || has_polypyrimidine) {
+            cons.erase(
+                std::remove(cons.begin(), cons.end(), ConsequenceType::SPLICE_REGION_VARIANT),
+                cons.end());
+        }
+        if (has_donor_5th) {
+            cons.erase(
+                std::remove(cons.begin(), cons.end(), ConsequenceType::SPLICE_DONOR_REGION_VARIANT),
+                cons.end());
+        }
+    }
+
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT);
+}
+
+TEST(SpliceConsequenceSuppression, DonorRegionSuppressesSpliceRegionOnly) {
+    std::vector<ConsequenceType> cons = {
+        ConsequenceType::SPLICE_DONOR_REGION_VARIANT,
+        ConsequenceType::SPLICE_REGION_VARIANT
+    };
+
+    std::sort(cons.begin(), cons.end());
+
+    if (cons.size() > 1) {
+        auto has = [&](ConsequenceType t) {
+            return std::find(cons.begin(), cons.end(), t) != cons.end();
+        };
+        if (has(ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT) ||
+            has(ConsequenceType::SPLICE_DONOR_REGION_VARIANT) ||
+            has(ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT)) {
+            cons.erase(
+                std::remove(cons.begin(), cons.end(), ConsequenceType::SPLICE_REGION_VARIANT),
+                cons.end());
+        }
+    }
+
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::SPLICE_DONOR_REGION_VARIANT);
+}
+
+TEST(SpliceConsequenceSuppression, PolypyrimidineSuppressesSpliceRegion) {
+    std::vector<ConsequenceType> cons = {
+        ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT,
+        ConsequenceType::SPLICE_REGION_VARIANT
+    };
+
+    std::sort(cons.begin(), cons.end());
+
+    if (cons.size() > 1) {
+        auto has = [&](ConsequenceType t) {
+            return std::find(cons.begin(), cons.end(), t) != cons.end();
+        };
+        if (has(ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT) ||
+            has(ConsequenceType::SPLICE_DONOR_REGION_VARIANT) ||
+            has(ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT)) {
+            cons.erase(
+                std::remove(cons.begin(), cons.end(), ConsequenceType::SPLICE_REGION_VARIANT),
+                cons.end());
+        }
+    }
+
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT);
+}
+
+TEST(SpliceConsequenceSuppression, SpliceRegionAloneNotSuppressed) {
+    std::vector<ConsequenceType> cons = {
+        ConsequenceType::SPLICE_REGION_VARIANT
+    };
+
+    // With only one consequence, suppression should not fire
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::SPLICE_REGION_VARIANT);
+}

@@ -2439,3 +2439,130 @@ TEST(OutputEdgeCases, VCFEmptyInfoField) {
     std::string content = read_file(tmp.path());
     EXPECT_NE(content.find("CSQ="), std::string::npos);
 }
+
+// ============================================================================
+// is_valid_json_number tests (tested via JSON output behavior)
+// ============================================================================
+
+TEST_F(JSONWriterTest, ValidIntegerUnquoted) {
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["test_int"] = "42";
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\"test_int\": 42"), std::string::npos);
+}
+
+TEST_F(JSONWriterTest, ValidDecimalUnquoted) {
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["test_dec"] = "3.14";
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\"test_dec\": 3.14"), std::string::npos);
+}
+
+TEST_F(JSONWriterTest, ValidNegativeUnquoted) {
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["test_neg"] = "-0.5";
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\"test_neg\": -0.5"), std::string::npos);
+}
+
+TEST_F(JSONWriterTest, ValidScientificUnquoted) {
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["test_sci"] = "1.5e-3";
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\"test_sci\": 1.5e-3"), std::string::npos);
+}
+
+TEST_F(JSONWriterTest, InvalidStringQuoted) {
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["test_str"] = "abc";
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\"test_str\": \"abc\""), std::string::npos);
+}
+
+TEST_F(JSONWriterTest, NaNQuoted) {
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["test_nan"] = "NaN";
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\"test_nan\": \"NaN\""), std::string::npos);
+}
+
+TEST_F(JSONWriterTest, DotNotANumber) {
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["test_dot"] = ".";
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\"test_dot\": \".\""), std::string::npos);
+}
+
+// ============================================================================
+// VCF URL encoding edge cases
+// ============================================================================
+
+TEST_F(VCFWriterTest, VCFEscapeTab) {
+    VCFWriter writer(tmp.path());
+    writer.set_skip_header(true);
+    writer.set_field_order({"Allele", "SYMBOL"});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.gene_symbol = "gene\tname";
+    writer.write_annotation(ann, {});
+    writer.flush_variant();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("gene%09name"), std::string::npos);
+}
+
+TEST_F(VCFWriterTest, VCFEscapeMultipleSpecialChars) {
+    VCFWriter writer(tmp.path());
+    writer.set_skip_header(true);
+    writer.set_field_order({"Allele", "Existing_variation"});
+    VariantAnnotation ann = make_basic_annotation();
+    ann.existing_variation = "a|b,c;d=e f";
+    writer.write_annotation(ann, {});
+    writer.flush_variant();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("a%7Cb%2Cc%3Bd%3De%20f"), std::string::npos);
+}

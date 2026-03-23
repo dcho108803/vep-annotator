@@ -1877,14 +1877,32 @@ static std::string generate_hgvsc_intronic(
     const std::string& ref,
     const std::string& alt,
     const Transcript& transcript,
-    bool include_version = false);
+    bool include_version = false,
+    const std::string& prefix = "c");
 
 static std::string generate_hgvsc_utr(
     const std::string& utr_pos_str,
     const std::string& ref,
     const std::string& alt,
     const Transcript& transcript,
-    bool include_version = false);
+    bool include_version = false,
+    const std::string& prefix = "c");
+
+static void append_hgvs_change(
+    std::ostringstream& oss,
+    const std::string& start_pos,
+    const std::string& hgvs_ref,
+    const std::string& hgvs_alt,
+    const std::function<std::string(int)>& offset_fn);
+
+static std::string build_hgvsc(
+    const std::string& pos_str,
+    const std::string& ref,
+    const std::string& alt,
+    const Transcript& transcript,
+    bool include_version,
+    const std::string& prefix,
+    const std::function<std::string(int)>& offset_fn);
 
 VariantAnnotation VEPAnnotator::annotate_transcript(
     const std::string& chrom,
@@ -1964,6 +1982,9 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
         } else {
             annotate_noncds_hgvsc(pos, ref, alt, transcript, ann);
         }
+    } else {
+        // Non-coding transcript: generate n. HGVSc notation
+        annotate_noncoding_hgvsc(pos, ref, alt, transcript, ann);
     }
 
     // Populate metadata and return
@@ -2119,17 +2140,9 @@ void VEPAnnotator::annotate_noncds_hgvsc(
     const Transcript& transcript,
     VariantAnnotation& ann) {
 
-    // Check if variant is intronic (between exons)
-    bool is_intronic = false;
-    std::vector<Exon> sorted_exons = transcript.exons;
-    std::sort(sorted_exons.begin(), sorted_exons.end(),
-              [](const Exon& a, const Exon& b) { return a.start < b.start; });
-    for (size_t i = 0; i + 1 < sorted_exons.size(); ++i) {
-        if (pos > sorted_exons[i].end && pos < sorted_exons[i + 1].start) {
-            is_intronic = true;
-            break;
-        }
-    }
+    // Check if variant is intronic (consequences already determined before this call)
+    bool is_intronic = std::find(ann.consequences.begin(), ann.consequences.end(),
+                                  ConsequenceType::INTRON_VARIANT) != ann.consequences.end();
 
     if (is_intronic) {
         auto calc_cds_fn = [this](int gpos, const Transcript& t) -> int {
@@ -2181,7 +2194,7 @@ void VEPAnnotator::annotate_noncds_hgvsc(
     if (in_5utr) {
         int distance = 0;
         if (transcript.strand == '+') {
-            for (const auto& exon : sorted_exons) {
+            for (const auto& exon : transcript.exons) {
                 if (exon.end < pos) continue;
                 if (exon.start >= transcript.cds_start) break;
                 int ex_start = std::max(exon.start, pos);
@@ -2191,7 +2204,7 @@ void VEPAnnotator::annotate_noncds_hgvsc(
                 }
             }
         } else {
-            for (auto it = sorted_exons.rbegin(); it != sorted_exons.rend(); ++it) {
+            for (auto it = transcript.exons.rbegin(); it != transcript.exons.rend(); ++it) {
                 if (it->start > pos) continue;
                 if (it->end <= transcript.cds_end) break;
                 int ex_start = std::max(it->start, transcript.cds_end + 1);
@@ -2208,7 +2221,7 @@ void VEPAnnotator::annotate_noncds_hgvsc(
     } else if (in_3utr) {
         int distance = 0;
         if (transcript.strand == '+') {
-            for (const auto& exon : sorted_exons) {
+            for (const auto& exon : transcript.exons) {
                 if (exon.end <= transcript.cds_end) continue;
                 if (exon.start > pos) break;
                 int ex_start = std::max(exon.start, transcript.cds_end + 1);
@@ -2218,7 +2231,7 @@ void VEPAnnotator::annotate_noncds_hgvsc(
                 }
             }
         } else {
-            for (auto it = sorted_exons.rbegin(); it != sorted_exons.rend(); ++it) {
+            for (auto it = transcript.exons.rbegin(); it != transcript.exons.rend(); ++it) {
                 if (it->start >= transcript.cds_start) continue;
                 if (it->end < pos) break;  // past the variant going downward
                 int ex_start = std::max(it->start, pos);
@@ -2232,6 +2245,41 @@ void VEPAnnotator::annotate_noncds_hgvsc(
             std::string utr_pos_str = "*" + std::to_string(distance);
             ann.hgvsc = generate_hgvsc_utr(utr_pos_str, ref, alt, transcript, transcript_version_);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// annotate_noncoding_hgvsc: n. HGVSc notation for non-coding transcripts
+// ---------------------------------------------------------------------------
+void VEPAnnotator::annotate_noncoding_hgvsc(
+    int pos,
+    const std::string& ref, const std::string& alt,
+    const Transcript& transcript,
+    VariantAnnotation& ann) {
+
+    // Check if variant is intronic (consequences already determined before this call)
+    bool is_intronic = std::find(ann.consequences.begin(), ann.consequences.end(),
+                                  ConsequenceType::INTRON_VARIANT) != ann.consequences.end();
+
+    if (is_intronic) {
+        // Use cDNA position calculator for non-coding transcripts
+        auto calc_cdna_fn = [this](int gpos, const Transcript& t) -> int {
+            return this->calculate_cdna_position(gpos, t);
+        };
+        std::string intronic_pos = calculate_intronic_hgvsc_position(
+            pos, transcript, calc_cdna_fn);
+        if (!intronic_pos.empty()) {
+            ann.hgvsc = generate_hgvsc_intronic(intronic_pos, ref, alt, transcript, transcript_version_, "n");
+        }
+        return;
+    }
+
+    // Exonic: use cDNA position with n. prefix
+    int cdna_pos = ann.cdna_position;
+    if (cdna_pos > 0) {
+        std::string pos_str = std::to_string(cdna_pos);
+        ann.hgvsc = build_hgvsc(pos_str, ref, alt, transcript, transcript_version_, "n",
+            [cdna_pos](int delta) { return std::to_string(cdna_pos + delta); });
     }
 }
 
@@ -2479,6 +2527,26 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
         consequences.erase(std::unique(consequences.begin(), consequences.end()), consequences.end());
     }
 
+    // Suppress general splice types when more specific sub-types are present
+    if (consequences.size() > 1) {
+        auto has = [&](ConsequenceType t) {
+            return std::find(consequences.begin(), consequences.end(), t) != consequences.end();
+        };
+        bool has_donor_5th = has(ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT);
+        bool has_donor_region = has(ConsequenceType::SPLICE_DONOR_REGION_VARIANT);
+        bool has_polypyrimidine = has(ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT);
+        if (has_donor_5th || has_donor_region || has_polypyrimidine) {
+            consequences.erase(
+                std::remove(consequences.begin(), consequences.end(), ConsequenceType::SPLICE_REGION_VARIANT),
+                consequences.end());
+        }
+        if (has_donor_5th) {
+            consequences.erase(
+                std::remove(consequences.begin(), consequences.end(), ConsequenceType::SPLICE_DONOR_REGION_VARIANT),
+                consequences.end());
+        }
+    }
+
     // Non-coding transcript
     if (!transcript.is_coding()) {
         if (in_exon) {
@@ -2489,7 +2557,9 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 consequences.push_back(ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT);
             }
         } else if (in_intron) {
-            if (consequences.empty()) {
+            // Always add intron_variant for intronic positions (even with splice consequences)
+            if (std::find(consequences.begin(), consequences.end(),
+                          ConsequenceType::INTRON_VARIANT) == consequences.end()) {
                 consequences.push_back(ConsequenceType::INTRON_VARIANT);
             }
         } else {
@@ -2505,20 +2575,17 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
     }
     // If only splice-related consequences were added for intronic variant, add intron_variant too
     if (in_intron && !consequences.empty()) {
-        bool has_non_splice = false;
-        for (const auto& c : consequences) {
-            if (c != ConsequenceType::SPLICE_ACCEPTOR_VARIANT &&
-                c != ConsequenceType::SPLICE_DONOR_VARIANT &&
-                c != ConsequenceType::SPLICE_REGION_VARIANT &&
-                c != ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT &&
-                c != ConsequenceType::SPLICE_DONOR_REGION_VARIANT &&
-                c != ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT) {
-                has_non_splice = true;
-                break;
-            }
-        }
-        if (!has_non_splice) {
-            return consequences; // Return splice consequences only
+        auto is_splice = [](ConsequenceType c) {
+            return c == ConsequenceType::SPLICE_ACCEPTOR_VARIANT ||
+                   c == ConsequenceType::SPLICE_DONOR_VARIANT ||
+                   c == ConsequenceType::SPLICE_REGION_VARIANT ||
+                   c == ConsequenceType::SPLICE_DONOR_5TH_BASE_VARIANT ||
+                   c == ConsequenceType::SPLICE_DONOR_REGION_VARIANT ||
+                   c == ConsequenceType::SPLICE_POLYPYRIMIDINE_TRACT_VARIANT;
+        };
+        if (std::all_of(consequences.begin(), consequences.end(), is_splice)) {
+            consequences.push_back(ConsequenceType::INTRON_VARIANT);
+            return consequences;
         }
     }
 
@@ -2589,13 +2656,23 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 }
             }
 
-            // Stop codon check for inframe deletions overlapping the stop codon
-            if (length_diff < 0 && length_diff % 3 == 0) {
+            // Stop codon check for inframe indels overlapping the stop codon
+            if (length_diff != 0 && length_diff % 3 == 0) {
                 int stop_codon_start = cds_length - 2;
-                int del_end = cds_pos + ref_len - 1;
-                if (stop_codon_start > 0 && del_end >= stop_codon_start) {
-                    consequences.push_back(ConsequenceType::STOP_LOST);
-                    return consequences;
+                if (stop_codon_start > 0) {
+                    bool overlaps_stop = false;
+                    if (length_diff < 0) {
+                        // Deletion: check if deleted region reaches stop codon
+                        int del_end = cds_pos + ref_len - 1;
+                        overlaps_stop = (del_end >= stop_codon_start);
+                    } else {
+                        // Insertion within stop codon
+                        overlaps_stop = (cds_pos >= stop_codon_start && cds_pos <= cds_length);
+                    }
+                    if (overlaps_stop) {
+                        consequences.push_back(ConsequenceType::STOP_LOST);
+                        return consequences;
+                    }
                 }
             }
 
@@ -3012,31 +3089,27 @@ static std::string calculate_intronic_hgvsc_position(
     const Transcript& transcript,
     const std::function<int(int, const Transcript&)>& calc_cds_pos) {
 
-    // Need sorted exons in genomic order
-    std::vector<Exon> sorted_exons = transcript.exons;
-    std::sort(sorted_exons.begin(), sorted_exons.end(),
-              [](const Exon& a, const Exon& b) { return a.start < b.start; });
-
-    // Find which intron the variant falls in (between sorted_exons[i] and sorted_exons[i+1])
-    for (size_t i = 0; i + 1 < sorted_exons.size(); ++i) {
-        int intron_start = sorted_exons[i].end + 1;
-        int intron_end = sorted_exons[i + 1].start - 1;
+    // Exons are already sorted by genomic start position at load time
+    // Find which intron the variant falls in (between transcript.exons[i] and transcript.exons[i+1])
+    for (size_t i = 0; i + 1 < transcript.exons.size(); ++i) {
+        int intron_start = transcript.exons[i].end + 1;
+        int intron_end = transcript.exons[i + 1].start - 1;
 
         if (genomic_pos >= intron_start && genomic_pos <= intron_end) {
             // Found the intron
-            int dist_to_upstream_exon_end = genomic_pos - sorted_exons[i].end;
-            int dist_to_downstream_exon_start = sorted_exons[i + 1].start - genomic_pos;
+            int dist_to_upstream_exon_end = genomic_pos - transcript.exons[i].end;
+            int dist_to_downstream_exon_start = transcript.exons[i + 1].start - genomic_pos;
 
             if (transcript.strand == '+') {
                 if (dist_to_upstream_exon_end <= dist_to_downstream_exon_start) {
                     // Closer to upstream exon end: c.CDS_POS+offset
-                    int cds_of_exon_end = calc_cds_pos(sorted_exons[i].end, transcript);
+                    int cds_of_exon_end = calc_cds_pos(transcript.exons[i].end, transcript);
                     if (cds_of_exon_end > 0) {
                         return std::to_string(cds_of_exon_end) + "+" + std::to_string(dist_to_upstream_exon_end);
                     }
                 } else {
                     // Closer to downstream exon start: c.CDS_POS-offset
-                    int cds_of_exon_start = calc_cds_pos(sorted_exons[i + 1].start, transcript);
+                    int cds_of_exon_start = calc_cds_pos(transcript.exons[i + 1].start, transcript);
                     if (cds_of_exon_start > 0) {
                         return std::to_string(cds_of_exon_start) + "-" + std::to_string(dist_to_downstream_exon_start);
                     }
@@ -3045,13 +3118,13 @@ static std::string calculate_intronic_hgvsc_position(
                 // Minus strand: genomic upstream exon end is transcript downstream, and vice versa
                 if (dist_to_downstream_exon_start <= dist_to_upstream_exon_end) {
                     // Closer to the genomic downstream exon start (which is transcript upstream)
-                    int cds_of_exon_start = calc_cds_pos(sorted_exons[i + 1].start, transcript);
+                    int cds_of_exon_start = calc_cds_pos(transcript.exons[i + 1].start, transcript);
                     if (cds_of_exon_start > 0) {
                         return std::to_string(cds_of_exon_start) + "+" + std::to_string(dist_to_downstream_exon_start);
                     }
                 } else {
                     // Closer to the genomic upstream exon end (which is transcript downstream)
-                    int cds_of_exon_end = calc_cds_pos(sorted_exons[i].end, transcript);
+                    int cds_of_exon_end = calc_cds_pos(transcript.exons[i].end, transcript);
                     if (cds_of_exon_end > 0) {
                         return std::to_string(cds_of_exon_end) + "-" + std::to_string(dist_to_upstream_exon_end);
                     }
@@ -3064,23 +3137,69 @@ static std::string calculate_intronic_hgvsc_position(
 }
 
 /**
- * Generate HGVSc notation for intronic variants using pre-calculated intronic position.
+ * Shared HGVS change formatter: appends SNV/del/ins/delins notation to oss.
+ * offset_fn(delta) returns the end position string for multi-base changes.
  */
-static std::string generate_hgvsc_intronic(
-    const std::string& intronic_pos,
+static void append_hgvs_change(
+    std::ostringstream& oss,
+    const std::string& start_pos,
+    const std::string& hgvs_ref,
+    const std::string& hgvs_alt,
+    const std::function<std::string(int)>& offset_fn) {
+
+    if (hgvs_ref.length() == 1 && hgvs_alt.length() == 1) {
+        oss << start_pos << hgvs_ref << ">" << hgvs_alt;
+    } else if (hgvs_ref.length() > hgvs_alt.length()) {
+        int del_len = static_cast<int>(hgvs_ref.length() - hgvs_alt.length());
+        if (del_len == 1) {
+            oss << start_pos << "del";
+        } else {
+            std::string end_pos = offset_fn(del_len - 1);
+            if (!end_pos.empty()) {
+                oss << start_pos << "_" << end_pos << "del";
+            } else {
+                oss << start_pos << "del";
+            }
+        }
+    } else if (hgvs_alt.length() > hgvs_ref.length()) {
+        std::string inserted = hgvs_alt.substr(hgvs_ref.length());
+        std::string end_pos = offset_fn(1);
+        if (!end_pos.empty()) {
+            oss << start_pos << "_" << end_pos << "ins" << inserted;
+        } else {
+            oss << start_pos << "ins" << inserted;
+        }
+    } else {
+        // MNV (same-length substitution, len >= 2 since SNV handled above)
+        std::string end_pos = offset_fn(static_cast<int>(hgvs_ref.length()) - 1);
+        if (!end_pos.empty()) {
+            oss << start_pos << "_" << end_pos << "delins" << hgvs_alt;
+        } else {
+            oss << start_pos << "delins" << hgvs_alt;
+        }
+    }
+}
+
+/**
+ * Build a complete HGVSc string: "TRANSCRIPT:prefix.CHANGE".
+ * Handles strand complementation and delegates formatting to append_hgvs_change.
+ */
+static std::string build_hgvsc(
+    const std::string& pos_str,
     const std::string& ref,
     const std::string& alt,
     const Transcript& transcript,
-    bool include_version) {
+    bool include_version,
+    const std::string& prefix,
+    const std::function<std::string(int)>& offset_fn) {
 
     std::ostringstream oss;
     std::string tid = transcript.id;
     if (include_version && !transcript.version.empty()) {
         tid += "." + transcript.version;
     }
-    oss << tid << ":c.";
+    oss << tid << ":" << prefix << ".";
 
-    // For minus-strand transcripts, complement the alleles to transcript orientation
     std::string hgvs_ref = ref;
     std::string hgvs_alt = alt;
     if (transcript.strand == '-') {
@@ -3088,22 +3207,72 @@ static std::string generate_hgvsc_intronic(
         hgvs_alt = reverse_complement_sequence(alt);
     }
 
-    if (hgvs_ref.length() == 1 && hgvs_alt.length() == 1) {
-        // SNV
-        oss << intronic_pos << hgvs_ref << ">" << hgvs_alt;
-    } else if (hgvs_ref.length() > hgvs_alt.length()) {
-        // Deletion
-        oss << intronic_pos << "del";
-    } else if (hgvs_alt.length() > hgvs_ref.length()) {
-        // Insertion
-        std::string inserted = hgvs_alt.substr(hgvs_ref.length());
-        oss << intronic_pos << "ins" << inserted;
-    } else {
-        // Substitution (MNV)
-        oss << intronic_pos << "delins" << hgvs_alt;
-    }
-
+    append_hgvs_change(oss, pos_str, hgvs_ref, hgvs_alt, offset_fn);
     return oss.str();
+}
+
+/**
+ * Compute an intronic position offset by delta bases along the transcript.
+ * For '+' offsets (after exon): moves deeper into intron (97+5, delta=2 -> 97+7).
+ * For '-' offsets (before exon): moves toward the exon (98-5, delta=2 -> 98-3).
+ */
+static std::string offset_intronic_pos(const std::string& intronic_pos, int delta) {
+    // Find +/- separator (skip position 0 which could be part of a negative CDS pos)
+    size_t sep = std::string::npos;
+    for (size_t i = 1; i < intronic_pos.size(); ++i) {
+        if (intronic_pos[i] == '+' || intronic_pos[i] == '-') {
+            sep = i;
+            break;
+        }
+    }
+    if (sep == std::string::npos) return "";
+
+    std::string cds_part = intronic_pos.substr(0, sep);
+    char sign = intronic_pos[sep];
+    int offset = std::stoi(intronic_pos.substr(sep + 1));
+
+    if (sign == '+') {
+        return cds_part + "+" + std::to_string(offset + delta);
+    } else {
+        int new_offset = offset - delta;
+        if (new_offset <= 0) return "";  // would cross the exon boundary
+        return cds_part + "-" + std::to_string(new_offset);
+    }
+}
+
+/**
+ * Compute a UTR position offset by delta bases.
+ * 5'UTR: "-5" + delta 2 = "-3" (toward CDS).
+ * 3'UTR: "*3" + delta 2 = "*5" (away from CDS).
+ * Returns "" if the offset would cross the UTR/CDS boundary.
+ */
+static std::string offset_utr_pos(const std::string& utr_pos, int delta) {
+    if (utr_pos.empty()) return "";
+    if (utr_pos[0] == '-') {
+        int val = std::stoi(utr_pos.substr(1));
+        int new_val = val - delta;
+        if (new_val <= 0) return "";  // would cross into CDS
+        return "-" + std::to_string(new_val);
+    } else if (utr_pos[0] == '*') {
+        int val = std::stoi(utr_pos.substr(1));
+        return "*" + std::to_string(val + delta);
+    }
+    return "";
+}
+
+/**
+ * Generate HGVSc notation for intronic variants using pre-calculated intronic position.
+ */
+static std::string generate_hgvsc_intronic(
+    const std::string& intronic_pos,
+    const std::string& ref,
+    const std::string& alt,
+    const Transcript& transcript,
+    bool include_version,
+    const std::string& prefix) {
+
+    return build_hgvsc(intronic_pos, ref, alt, transcript, include_version, prefix,
+        [&](int delta) { return offset_intronic_pos(intronic_pos, delta); });
 }
 
 /**
@@ -3115,34 +3284,11 @@ static std::string generate_hgvsc_utr(
     const std::string& ref,
     const std::string& alt,
     const Transcript& transcript,
-    bool include_version) {
+    bool include_version,
+    const std::string& prefix) {
 
-    std::ostringstream oss;
-    std::string tid = transcript.id;
-    if (include_version && !transcript.version.empty()) {
-        tid += "." + transcript.version;
-    }
-    oss << tid << ":c.";
-
-    std::string hgvs_ref = ref;
-    std::string hgvs_alt = alt;
-    if (transcript.strand == '-') {
-        hgvs_ref = reverse_complement_sequence(ref);
-        hgvs_alt = reverse_complement_sequence(alt);
-    }
-
-    if (hgvs_ref.length() == 1 && hgvs_alt.length() == 1) {
-        oss << utr_pos_str << hgvs_ref << ">" << hgvs_alt;
-    } else if (hgvs_ref.length() > hgvs_alt.length()) {
-        oss << utr_pos_str << "del";
-    } else if (hgvs_alt.length() > hgvs_ref.length()) {
-        std::string inserted = hgvs_alt.substr(hgvs_ref.length());
-        oss << utr_pos_str << "ins" << inserted;
-    } else {
-        oss << utr_pos_str << "delins" << hgvs_alt;
-    }
-
-    return oss.str();
+    return build_hgvsc(utr_pos_str, ref, alt, transcript, include_version, prefix,
+        [&](int delta) { return offset_utr_pos(utr_pos_str, delta); });
 }
 
 std::string VEPAnnotator::generate_hgvsp(

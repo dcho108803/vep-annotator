@@ -777,6 +777,15 @@ private:
         VariantAnnotation& ann);
 
     /**
+     * Annotate non-coding transcript HGVSc: n. notation for exonic and intronic positions
+     */
+    void annotate_noncoding_hgvsc(
+        int pos,
+        const std::string& ref, const std::string& alt,
+        const Transcript& transcript,
+        VariantAnnotation& ann);
+
+    /**
      * Populate transcript metadata: CCDS, ENSP, CANONICAL, MANE, TSL, APPRIS, etc.
      */
     void populate_transcript_metadata(

@@ -602,7 +602,7 @@ private:
 
         // If still multiple, pick the best one
         if (result.size() > 1) {
-            return pick_one(result);
+            return pick_one(std::move(result));
         }
 
         return result;
@@ -656,29 +656,16 @@ private:
             by_allele[key].push_back(&annotations[i]);
         }
 
-        // Pick best for each allele
+        // Pick best for each allele (sort pointers to avoid copying)
         for (auto& pair : by_allele) {
             if (pair.second.empty()) continue;
 
-            std::vector<AnnotationWithMeta> temp;
-            for (auto* ptr : pair.second) {
-                temp.push_back(*ptr);
-            }
-
-            std::sort(temp.begin(), temp.end(),
-                [this](const AnnotationWithMeta& a, const AnnotationWithMeta& b) {
-                    return is_better(a, b);
+            std::sort(pair.second.begin(), pair.second.end(),
+                [this](const AnnotationWithMeta* a, const AnnotationWithMeta* b) {
+                    return is_better(*a, *b);
                 });
 
-            // Find and flag the best one in the original vector
-            for (size_t i = 0; i < annotations.size(); ++i) {
-                if (annotations[i].annotation.ref_allele == temp[0].annotation.ref_allele &&
-                    annotations[i].annotation.alt_allele == temp[0].annotation.alt_allele &&
-                    annotations[i].annotation.transcript_id == temp[0].annotation.transcript_id) {
-                    annotations[i].is_picked = true;
-                    break;
-                }
-            }
+            pair.second[0]->is_picked = true;
         }
     }
 
@@ -696,30 +683,16 @@ private:
             by_allele_gene[key].push_back(&annotations[i]);
         }
 
-        // Pick best for each allele+gene
+        // Pick best for each allele+gene (sort pointers to avoid copying)
         for (auto& pair : by_allele_gene) {
             if (pair.second.empty()) continue;
 
-            std::vector<AnnotationWithMeta> temp;
-            for (auto* ptr : pair.second) {
-                temp.push_back(*ptr);
-            }
-
-            std::sort(temp.begin(), temp.end(),
-                [this](const AnnotationWithMeta& a, const AnnotationWithMeta& b) {
-                    return is_better(a, b);
+            std::sort(pair.second.begin(), pair.second.end(),
+                [this](const AnnotationWithMeta* a, const AnnotationWithMeta* b) {
+                    return is_better(*a, *b);
                 });
 
-            // Find and flag the best one in the original vector
-            for (size_t i = 0; i < annotations.size(); ++i) {
-                if (annotations[i].annotation.ref_allele == temp[0].annotation.ref_allele &&
-                    annotations[i].annotation.alt_allele == temp[0].annotation.alt_allele &&
-                    annotations[i].annotation.gene_id == temp[0].annotation.gene_id &&
-                    annotations[i].annotation.transcript_id == temp[0].annotation.transcript_id) {
-                    annotations[i].is_picked = true;
-                    break;
-                }
-            }
+            pair.second[0]->is_picked = true;
         }
     }
 };

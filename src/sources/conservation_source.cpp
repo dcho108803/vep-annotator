@@ -108,7 +108,7 @@ public:
 
     std::string get_data_path() const override { return path_; }
 
-    bool is_thread_safe() const override { return true; }
+    bool is_thread_safe() const override { return false; }  // BigWig file handles not thread-safe
 
 protected:
     std::string path_;

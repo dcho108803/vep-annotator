@@ -170,7 +170,7 @@ public:
         return paths;
     }
 
-    bool is_thread_safe() const override { return true; }
+    bool is_thread_safe() const override { return false; }  // Tabix file handles not thread-safe
 
     double get_cutoff() const { return cutoff_; }
 

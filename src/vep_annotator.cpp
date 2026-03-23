@@ -2152,6 +2152,99 @@ void VEPAnnotator::annotate_noncds_hgvsc(
             pos, transcript, calc_cds_fn);
         if (!intronic_pos.empty()) {
             ann.hgvsc = generate_hgvsc_intronic(intronic_pos, ref, alt, transcript, transcript_version_);
+        } else {
+            // UTR intron: CDS position was 0 for flanking exons.
+            // Compute UTR-based intronic position (e.g., c.-14+3 or c.*5-2).
+            for (size_t i = 0; i + 1 < transcript.exons.size(); ++i) {
+                int intron_start = transcript.exons[i].end + 1;
+                int intron_end = transcript.exons[i + 1].start - 1;
+                if (pos < intron_start || pos > intron_end) continue;
+
+                int dist_to_prev = pos - transcript.exons[i].end;
+                int dist_to_next = transcript.exons[i + 1].start - pos;
+
+                // Determine nearest exon boundary in transcript direction
+                int exon_boundary;
+                int offset;
+                char sign;
+                if (transcript.strand == '+') {
+                    if (dist_to_prev <= dist_to_next) {
+                        exon_boundary = transcript.exons[i].end;
+                        offset = dist_to_prev; sign = '+';
+                    } else {
+                        exon_boundary = transcript.exons[i + 1].start;
+                        offset = dist_to_next; sign = '-';
+                    }
+                } else {
+                    if (dist_to_next <= dist_to_prev) {
+                        exon_boundary = transcript.exons[i + 1].start;
+                        offset = dist_to_next; sign = '+';
+                    } else {
+                        exon_boundary = transcript.exons[i].end;
+                        offset = dist_to_prev; sign = '-';
+                    }
+                }
+
+                // Compute UTR position of the exon boundary
+                bool eb_in_5utr = false, eb_in_3utr = false;
+                if (transcript.strand == '+') {
+                    if (exon_boundary < transcript.cds_start) eb_in_5utr = true;
+                    else if (exon_boundary > transcript.cds_end) eb_in_3utr = true;
+                } else {
+                    if (exon_boundary > transcript.cds_end) eb_in_5utr = true;
+                    else if (exon_boundary < transcript.cds_start) eb_in_3utr = true;
+                }
+
+                std::string utr_pos;
+                if (eb_in_5utr) {
+                    int distance = 0;
+                    if (transcript.strand == '+') {
+                        for (const auto& exon : transcript.exons) {
+                            if (exon.end < exon_boundary) continue;
+                            if (exon.start >= transcript.cds_start) break;
+                            int s = std::max(exon.start, exon_boundary);
+                            int e = std::min(exon.end, transcript.cds_start - 1);
+                            if (s <= e) distance += e - s + 1;
+                        }
+                    } else {
+                        for (auto it = transcript.exons.rbegin(); it != transcript.exons.rend(); ++it) {
+                            if (it->start > exon_boundary) continue;
+                            if (it->end <= transcript.cds_end) break;
+                            int s = std::max(it->start, transcript.cds_end + 1);
+                            int e = std::min(it->end, exon_boundary);
+                            if (s <= e) distance += e - s + 1;
+                        }
+                    }
+                    if (distance > 0) utr_pos = "-" + std::to_string(distance);
+                } else if (eb_in_3utr) {
+                    int distance = 0;
+                    if (transcript.strand == '+') {
+                        for (const auto& exon : transcript.exons) {
+                            if (exon.end <= transcript.cds_end) continue;
+                            if (exon.start > exon_boundary) break;
+                            int s = std::max(exon.start, transcript.cds_end + 1);
+                            int e = std::min(exon.end, exon_boundary);
+                            if (s <= e) distance += e - s + 1;
+                        }
+                    } else {
+                        for (auto it = transcript.exons.rbegin(); it != transcript.exons.rend(); ++it) {
+                            if (it->start >= transcript.cds_start) continue;
+                            if (it->end < exon_boundary) break;
+                            int s = std::max(it->start, exon_boundary);
+                            int e = std::min(it->end, transcript.cds_start - 1);
+                            if (s <= e) distance += e - s + 1;
+                        }
+                    }
+                    if (distance > 0) utr_pos = "*" + std::to_string(distance);
+                }
+
+                if (!utr_pos.empty()) {
+                    std::string utr_intronic = utr_pos + sign + std::to_string(offset);
+                    ann.hgvsc = generate_hgvsc_intronic(
+                        utr_intronic, ref, alt, transcript, transcript_version_);
+                }
+                break;
+            }
         }
         // Splice donor/acceptor variants in coding transcripts get p.?
         for (const auto& c : ann.consequences) {
@@ -2697,20 +2790,8 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
 
             // SNV or MNV (same length substitution)
             if (ref.length() == alt.length()) {
-                // Build CDS sequence for codon extraction
-                std::string cds_seq;
-                if (transcript.strand == '+') {
-                    for (const auto& cds : transcript.cds_regions) {
-                        cds_seq += reference_->get_sequence(transcript.chromosome, cds.start, cds.end);
-                    }
-                } else {
-                    for (auto it = transcript.cds_regions.rbegin(); it != transcript.cds_regions.rend(); ++it) {
-                        std::string seq = reference_->get_sequence(transcript.chromosome, it->start, it->end);
-                        std::reverse(seq.begin(), seq.end());
-                        for (char& c : seq) c = complement_base(c);
-                        cds_seq += seq;
-                    }
-                }
+                // Use cached CDS sequence for codon extraction
+                std::string cds_seq = build_cds_sequence(transcript.chromosome, transcript);
 
                 if (cds_seq.empty()) {
                     consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
@@ -2864,14 +2945,20 @@ int VEPAnnotator::calculate_cds_position(int genomic_pos, const Transcript& tran
 std::string VEPAnnotator::build_cds_sequence(
     const std::string& chrom, const Transcript& transcript) const {
 
+    // Check cache first
+    auto it = cds_cache_.find(transcript.id);
+    if (it != cds_cache_.end()) {
+        return it->second;
+    }
+
     std::string cds_seq;
     if (transcript.strand == '+') {
         for (const auto& cds : transcript.cds_regions) {
             cds_seq += reference_->get_sequence(chrom, cds.start, cds.end);
         }
     } else {
-        for (auto it = transcript.cds_regions.rbegin(); it != transcript.cds_regions.rend(); ++it) {
-            std::string seg = reference_->get_sequence(chrom, it->start, it->end);
+        for (auto rit = transcript.cds_regions.rbegin(); rit != transcript.cds_regions.rend(); ++rit) {
+            std::string seg = reference_->get_sequence(chrom, rit->start, rit->end);
             std::reverse(seg.begin(), seg.end());
             for (char& c : seg) c = complement_base(c);
             cds_seq += seg;
@@ -2889,6 +2976,7 @@ std::string VEPAnnotator::build_cds_sequence(
         }
     }
 
+    cds_cache_[transcript.id] = cds_seq;
     return cds_seq;
 }
 

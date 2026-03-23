@@ -31,6 +31,7 @@ public:
     }
 
     bool is_ready() const override { return reader_ != nullptr && reader_->is_valid(); }
+    bool is_thread_safe() const override { return false; }  // Tabix file handles not thread-safe
 
     void initialize() override {
         std::lock_guard<std::recursive_mutex> lock(mutex_);

@@ -11,6 +11,7 @@
 #include <sstream>
 #include <iomanip>
 #include <set>
+#include <unordered_set>
 #include <string>
 
 void print_filter_usage(const char* program_name) {
@@ -68,8 +69,8 @@ void print_filter_usage(const char* program_name) {
               << std::endl;
 }
 
-std::set<std::string> parse_comma_list(const std::string& list_str) {
-    std::set<std::string> result;
+std::unordered_set<std::string> parse_comma_list(const std::string& list_str) {
+    std::unordered_set<std::string> result;
     std::istringstream iss(list_str);
     std::string item;
 
@@ -244,14 +245,14 @@ int main(int argc, char* argv[]) {
 
         vep::FilterableRecord record = vep::parse_tsv_record(line, col_map);
 
-        // Apply --pick filter
+        // Apply --pick filter: only output the first passing record per variant
         if (config.pick_one) {
             std::string variant_key = record.get("CHROM") + ":" +
                                       record.get("POS") + ":" +
                                       record.get("REF") + ":" +
                                       record.get("ALT");
-            if (variant_key.empty()) {
-                // Try alternative column names
+            // Fallback column names if primary fields are empty
+            if (record.get("CHROM").empty()) {
                 variant_key = record.get("Chromosome") + ":" +
                               record.get("Position") + ":" +
                               record.get("Ref_allele") + ":" +
@@ -264,7 +265,10 @@ int main(int argc, char* argv[]) {
 
             if (vep::apply_filter(record, config)) {
                 seen_variants.insert(variant_key);
+                if (!count_only) output << line << "\n";
+                lines_passed++;
             }
+            continue;
         }
 
         if (vep::apply_filter(record, config)) {

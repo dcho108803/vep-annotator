@@ -1361,12 +1361,12 @@ private:
         for (char c : s) {
             switch (c) {
                 case '%': result += "%25"; break;
-                case '|': result += "&"; break;
-                case ',': result += "&"; break;
+                case '|': result += "%7C"; break;
+                case ',': result += "%2C"; break;
                 case ';': result += "%3B"; break;
                 case '=': result += "%3D"; break;
-                case ' ': result += "_"; break;
-                case '\t': result += "_"; break;
+                case ' ': result += "%20"; break;
+                case '\t': result += "%09"; break;
                 default: result += c; break;
             }
         }

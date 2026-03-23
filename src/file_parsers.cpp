@@ -9,6 +9,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <atomic>
 #include <sys/stat.h>
 
 #ifdef HAVE_HTSLIB
@@ -307,13 +308,19 @@ struct BigWigReader::Impl {
     }
 };
 
+// Reference count for global bwInit/bwCleanup lifecycle
+static std::atomic<int> bigwig_init_count{0};
+
 BigWigReader::BigWigReader(const std::string& path)
     : pimpl_(std::make_unique<Impl>()), path_(path) {
 
-    // Initialize libBigWig
-    if (bwInit(1 << 17) != 0) {
-        log(LogLevel::ERROR, "Failed to initialize libBigWig");
-        return;
+    // Initialize libBigWig (only on first reader)
+    if (bigwig_init_count.fetch_add(1) == 0) {
+        if (bwInit(1 << 17) != 0) {
+            bigwig_init_count.fetch_sub(1);
+            log(LogLevel::ERROR, "Failed to initialize libBigWig");
+            return;
+        }
     }
 
     // Open file
@@ -339,7 +346,11 @@ BigWigReader::BigWigReader(const std::string& path)
 }
 
 BigWigReader::~BigWigReader() {
-    bwCleanup();
+    // Close our file handle first (via Impl dtor), then cleanup global state if last reader
+    pimpl_.reset();
+    if (bigwig_init_count.fetch_sub(1) == 1) {
+        bwCleanup();
+    }
 }
 
 std::optional<double> BigWigReader::get_value(
@@ -741,7 +752,7 @@ std::unique_ptr<typename IntervalTree<T>::Node> IntervalTree<T>::build_tree(
         min_start = std::min(min_start, intervals_[idx].start);
         max_end = std::max(max_end, intervals_[idx].end);
     }
-    int center = (min_start + max_end) / 2;
+    int center = min_start + (max_end - min_start) / 2;
 
     auto node = std::make_unique<Node>();
     node->center = center;

@@ -11,7 +11,9 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <unordered_set>
 #include <map>
+#include <unordered_map>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -87,10 +89,10 @@ struct FilterConfig {
     bool match_all = true;  // AND vs OR
 
     // Quick filters
-    std::set<std::string> consequence_filter;  // Filter by consequence types
-    std::set<std::string> impact_filter;       // Filter by impact (HIGH, MODERATE, etc.)
-    std::set<std::string> gene_filter;         // Filter by gene list
-    std::set<std::string> biotype_filter;      // Filter by biotype
+    std::unordered_set<std::string> consequence_filter;  // Filter by consequence types
+    std::unordered_set<std::string> impact_filter;       // Filter by impact (HIGH, MODERATE, etc.)
+    std::unordered_set<std::string> gene_filter;         // Filter by gene list
+    std::unordered_set<std::string> biotype_filter;      // Filter by biotype
 
     // Numeric filters
     double min_af = -1.0;
@@ -124,7 +126,7 @@ struct FilterConfig {
  * Represents a single annotation record for filtering
  */
 struct FilterableRecord {
-    std::map<std::string, std::string> fields;
+    std::unordered_map<std::string, std::string> fields;
     std::string original_line;
 
     std::string get(const std::string& field) const {
@@ -504,8 +506,8 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
 /**
  * Load gene list from file
  */
-inline std::set<std::string> load_gene_list(const std::string& filepath) {
-    std::set<std::string> genes;
+inline std::unordered_set<std::string> load_gene_list(const std::string& filepath) {
+    std::unordered_set<std::string> genes;
     std::ifstream file(filepath);
 
     if (!file.is_open()) {

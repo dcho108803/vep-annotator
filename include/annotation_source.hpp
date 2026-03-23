@@ -89,7 +89,7 @@ public:
     /**
      * Thread-safe check - if false, source will be locked during annotation
      */
-    virtual bool is_thread_safe() const { return true; }
+    virtual bool is_thread_safe() const { return false; }
 
     /**
      * Get the data file path (for debugging/info)
@@ -103,11 +103,9 @@ protected:
      * Ensure the source is initialized
      */
     void ensure_initialized() {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (!is_ready()) {
-            std::lock_guard<std::recursive_mutex> lock(mutex_);
-            if (!is_ready()) {
-                initialize();
-            }
+            initialize();
         }
     }
 };

@@ -93,9 +93,9 @@ TEST(SpliceAI, FieldCount) {
 // Source properties
 // ============================================================================
 
-TEST(SpliceAI, ThreadSafe) {
+TEST(SpliceAI, NotThreadSafe) {
     auto source = create_spliceai_source("/nonexistent.vcf.gz");
-    EXPECT_TRUE(source->is_thread_safe());
+    EXPECT_FALSE(source->is_thread_safe());  // Tabix file handles not thread-safe
 }
 
 TEST(SpliceAI, Description) {

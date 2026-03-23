@@ -2623,7 +2623,8 @@ int main(int argc, char* argv[]) {
                             std::string cache_key = chrom + "\t" + std::to_string(ann_pos) + "\t" + cr + "\t" + ca;
                             auto cache_it = annotation_cache.find(cache_key);
                             if (cache_it != annotation_cache.end()) {
-                                annotations = cache_it->second;
+                                annotations = std::move(cache_it->second);
+                                annotation_cache.erase(cache_it);
                             } else {
                                 // Cache miss (SV, non-VCF format, etc.)
                                 if (need_all) {
@@ -2637,8 +2638,8 @@ int main(int argc, char* argv[]) {
                             if (need_all) {
                                 annotations = annotator.annotate(chrom, ann_pos, ann_ref, ann_alt);
                             } else {
-                                auto ann = annotator.annotate_most_severe(chrom, ann_pos, ann_ref, ann_alt);
-                                annotations.push_back(ann);
+                                annotations.push_back(
+                                    annotator.annotate_most_severe(chrom, ann_pos, ann_ref, ann_alt));
                             }
                         }
                         // If --minimal changed the alleles, mark MINIMISED and update positions

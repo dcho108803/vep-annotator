@@ -20,7 +20,7 @@ static FilterableRecord make_record(
     const std::string& original_line = "")
 {
     FilterableRecord rec;
-    rec.fields = fields;
+    rec.fields.insert(fields.begin(), fields.end());
     rec.original_line = original_line;
     return rec;
 }

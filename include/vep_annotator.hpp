@@ -706,6 +706,9 @@ private:
     bool include_numbers_ = false;
     bool include_total_length_ = false;
 
+    // Cache CDS sequences per transcript to avoid rebuilding for every variant
+    mutable std::unordered_map<std::string, std::string> cds_cache_;
+
     /**
      * Annotate variant against a single transcript
      */

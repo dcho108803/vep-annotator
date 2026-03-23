@@ -1519,9 +1519,8 @@ TEST_F(VCFWriterTest, VCFEscapePipe) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    // Pipe should be escaped to &
-    EXPECT_NE(content.find("rs123&rs456"), std::string::npos);
-    // No raw pipe in the CSQ value itself (besides field separators)
+    // Pipe should be URL-encoded to %7C
+    EXPECT_NE(content.find("rs123%7Crs456"), std::string::npos);
 }
 
 TEST_F(VCFWriterTest, VCFEscapeComma) {
@@ -1535,8 +1534,8 @@ TEST_F(VCFWriterTest, VCFEscapeComma) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    // Comma should be escaped to &
-    EXPECT_NE(content.find("rs123&rs456"), std::string::npos);
+    // Comma should be URL-encoded to %2C
+    EXPECT_NE(content.find("rs123%2Crs456"), std::string::npos);
 }
 
 TEST_F(VCFWriterTest, VCFEscapeSemicolon) {
@@ -1592,7 +1591,7 @@ TEST_F(VCFWriterTest, VCFEscapeSpace) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("gene_name"), std::string::npos);
+    EXPECT_NE(content.find("gene%20name"), std::string::npos);
 }
 
 TEST_F(VCFWriterTest, NoEscapeMode) {

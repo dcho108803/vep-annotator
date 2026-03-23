@@ -26,7 +26,10 @@ namespace vep {
  * Normalize chromosome name (remove "chr" prefix for consistency)
  */
 inline std::string normalize_chrom(const std::string& chrom) {
-    if (chrom.length() > 3 && chrom.substr(0, 3) == "chr") {
+    if (chrom.length() > 3 &&
+        (chrom[0] == 'c' || chrom[0] == 'C') &&
+        (chrom[1] == 'h' || chrom[1] == 'H') &&
+        (chrom[2] == 'r' || chrom[2] == 'R')) {
         return chrom.substr(3);
     }
     return chrom;

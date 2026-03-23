@@ -71,7 +71,22 @@ public:
             auto alt_it = record.find("alt");
 
             if (ref_it != record.end() && ref_it->second != ref) continue;
-            if (alt_it != record.end() && alt_it->second != alt) continue;
+            if (alt_it != record.end()) {
+                // Handle multi-allelic ALT fields (e.g., "A,T")
+                bool alt_match = false;
+                const std::string& alt_field = alt_it->second;
+                size_t start = 0;
+                while (start < alt_field.size()) {
+                    size_t comma = alt_field.find(',', start);
+                    if (comma == std::string::npos) comma = alt_field.size();
+                    if (alt_field.substr(start, comma - start) == alt) {
+                        alt_match = true;
+                        break;
+                    }
+                    start = comma + 1;
+                }
+                if (!alt_match) continue;
+            }
 
             // Extract scores
             auto ada_it = record.find("ada_score");
@@ -137,7 +152,22 @@ public:
             auto alt_it = record.find("alt");
 
             if (ref_it != record.end() && ref_it->second != ref) continue;
-            if (alt_it != record.end() && alt_it->second != alt) continue;
+            if (alt_it != record.end()) {
+                // Handle multi-allelic ALT fields (e.g., "A,T")
+                bool alt_match = false;
+                const std::string& alt_field = alt_it->second;
+                size_t start = 0;
+                while (start < alt_field.size()) {
+                    size_t comma = alt_field.find(',', start);
+                    if (comma == std::string::npos) comma = alt_field.size();
+                    if (alt_field.substr(start, comma - start) == alt) {
+                        alt_match = true;
+                        break;
+                    }
+                    start = comma + 1;
+                }
+                if (!alt_match) continue;
+            }
 
             auto ada_it = record.find("ada_score");
             auto rf_it = record.find("rf_score");

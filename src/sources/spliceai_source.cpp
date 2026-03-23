@@ -293,7 +293,7 @@ private:
 
         // Max delta score - preserve original string formatting
         double max_ds = std::max({ds_ag, ds_al, ds_dg, ds_dl});
-        if (max_ds > 0) {
+        if (max_ds >= 0) {
             std::string max_str;
             if (max_ds == ds_ag && fields[2] != ".") max_str = fields[2];
             else if (max_ds == ds_al && fields[3] != ".") max_str = fields[3];

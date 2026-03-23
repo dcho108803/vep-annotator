@@ -128,7 +128,7 @@ inline const std::vector<DbNSFPField> DBNSFP_PATHOGENICITY_FIELDS = {
 
     // MVP
     {"MVP_score", "MVP_score", "MVP (Missense Variant Pathogenicity) score", true, true, 0.7},
-    {"MVP_pred", "MVP_rankscore", "MVP rank score", true, true, -1},
+    {"MVP_rankscore", "MVP_rankscore", "MVP rank score", true, true, -1},
 
     // gMVP
     {"gMVP_score", "gMVP_score", "gMVP score", true, true, 0.5},
@@ -150,6 +150,10 @@ inline const std::vector<DbNSFPField> DBNSFP_CONSERVATION_FIELDS = {
 
 // Splicing Predictions (from dbNSFP)
 inline const std::vector<DbNSFPField> DBNSFP_SPLICE_FIELDS = {
+};
+
+// Other Fields (from dbNSFP)
+inline const std::vector<DbNSFPField> DBNSFP_OTHER_FIELDS = {
     {"GERP_RS_rankscore", "GERP++_RS_rankscore", "GERP++ RS rank score", true, true, -1},
     {"Interpro_domain", "Interpro_domain", "InterPro domain", false, false, -1},
     {"GTEx_V8_gene", "GTEx_V8_gene", "GTEx V8 gene expression", false, false, -1},
@@ -191,6 +195,7 @@ inline std::vector<DbNSFPField> get_all_dbnsfp_fields() {
     all_fields.insert(all_fields.end(), DBNSFP_PATHOGENICITY_FIELDS.begin(), DBNSFP_PATHOGENICITY_FIELDS.end());
     all_fields.insert(all_fields.end(), DBNSFP_CONSERVATION_FIELDS.begin(), DBNSFP_CONSERVATION_FIELDS.end());
     all_fields.insert(all_fields.end(), DBNSFP_SPLICE_FIELDS.begin(), DBNSFP_SPLICE_FIELDS.end());
+    all_fields.insert(all_fields.end(), DBNSFP_OTHER_FIELDS.begin(), DBNSFP_OTHER_FIELDS.end());
     all_fields.insert(all_fields.end(), DBNSFP_FREQUENCY_FIELDS.begin(), DBNSFP_FREQUENCY_FIELDS.end());
     all_fields.insert(all_fields.end(), DBNSFP_CLINICAL_FIELDS.begin(), DBNSFP_CLINICAL_FIELDS.end());
     return all_fields;

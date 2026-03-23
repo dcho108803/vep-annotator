@@ -220,14 +220,14 @@ public:
         }
 
         // Calculate CDS position of the last exon-exon junction
-        // The last junction is at the start of the last exon (+ strand)
-        // or end of the first exon (- strand).
-        // In CDS terms, this is the CDS position where the last exon begins.
+        // The last junction is at the end of the penultimate exon (+ strand)
+        // or start of the penultimate exon in genomic order (- strand).
+        // In CDS terms, this is the CDS position of the last base before the final intron.
         int junction_genomic = 0;
         if (transcript->strand == '+') {
-            junction_genomic = transcript->exons.back().start;
+            junction_genomic = transcript->exons[transcript->exons.size() - 2].end;
         } else {
-            junction_genomic = transcript->exons.front().end;
+            junction_genomic = transcript->exons[1].start;
         }
 
         int junction_cds_pos = calculate_cds_pos(junction_genomic, *transcript);

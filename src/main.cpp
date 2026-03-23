@@ -665,6 +665,7 @@ int main(int argc, char* argv[]) {
     std::string variant;
     std::string vcf_path;
     std::string output_path;
+    std::string input_data_string;  // --input-data: variant data as string
     bool debug = false;
 
     // Output format options
@@ -1415,9 +1416,8 @@ int main(int argc, char* argv[]) {
             // No-op: Perl-specific modes
         } else if (arg == "--input-data" && i + 1 < argc) {
             // Read variant data from string (Perl VEP compat)
-            vcf_path = "-";  // Treated as stdin later
-            // For now, just accept the flag
-            ++i;
+            input_data_string = argv[++i];
+            vcf_path = "-";  // Will be overridden by input_data_string
         } else if (arg == "--fork" && i + 1 < argc) {
             try { fork_count = std::stoi(argv[++i]); }
             catch (...) { fork_count = 1; }
@@ -2051,11 +2051,25 @@ int main(int argc, char* argv[]) {
             bool is_gzipped = !use_stdin && (vcf_path.size() > 3 &&
                               vcf_path.substr(vcf_path.size() - 3) == ".gz");
 
+            // If --input-data was provided, use it as an in-memory stream instead of stdin
+            std::istringstream input_data_stream;
+            if (!input_data_string.empty()) {
+                input_data_stream.str(input_data_string);
+                use_stdin = true;  // treat as stdin-like input
+            }
+            // Helper to read a line from the appropriate "stdin" source
+            auto read_stdin_line = [&](std::string& dest) -> bool {
+                if (!input_data_string.empty()) {
+                    return static_cast<bool>(std::getline(input_data_stream, dest));
+                }
+                return static_cast<bool>(std::getline(std::cin, dest));
+            };
+
             gzFile gz_file = nullptr;
             std::ifstream plain_file;
 
             if (use_stdin) {
-                // Reading from stdin - no file to open
+                // Reading from stdin or --input-data - no file to open
             } else if (is_gzipped) {
                 gz_file = gzopen(vcf_path.c_str(), "rb");
                 if (!gz_file) {
@@ -2144,7 +2158,7 @@ int main(int argc, char* argv[]) {
                 while (true) {
                     std::string buf_line;
                     if (use_stdin) {
-                        if (!std::getline(std::cin, buf_line)) break;
+                        if (!read_stdin_line(buf_line)) break;
                         while (!buf_line.empty() && buf_line.back() == '\r') buf_line.pop_back();
                     } else if (is_gzipped) {
                         bool gz_eof = false;
@@ -2304,7 +2318,7 @@ int main(int argc, char* argv[]) {
                 } else if (pre_read_idx < pre_read_lines.size()) {
                     line = pre_read_lines[pre_read_idx++];
                 } else if (use_stdin) {
-                    if (!std::getline(std::cin, line)) {
+                    if (!read_stdin_line(line)) {
                         break;
                     }
                     // Strip Windows \r\n line endings
@@ -2407,25 +2421,36 @@ int main(int argc, char* argv[]) {
                         parsed = true;
                     }
                 } else {
-                    // Default: VCF format
-                    std::istringstream iss(line);
-                    if (iss >> chrom >> pos >> id >> ref >> alt) {
-                        parsed = true;
-
-                        if (!(iss >> qual_field >> filter_field)) {
-                            qual_field = ".";
-                            filter_field = ".";
+                    // Default: VCF format (tab-delimited)
+                    {
+                        std::vector<std::string> vcf_fields;
+                        size_t start = 0;
+                        while (start <= line.size()) {
+                            size_t tab = line.find('\t', start);
+                            if (tab == std::string::npos) {
+                                vcf_fields.push_back(line.substr(start));
+                                break;
+                            }
+                            vcf_fields.push_back(line.substr(start, tab - start));
+                            start = tab + 1;
                         }
-                        if (!(iss >> info_field)) {
-                            info_field = ".";
-                        }
-
-                        // Capture sample columns (FORMAT + samples, col 8 onwards)
-                        std::string remainder;
-                        if (std::getline(iss, remainder)) {
-                            size_t first_non_ws = remainder.find_first_not_of(" \t");
-                            if (first_non_ws != std::string::npos) {
-                                sample_columns = remainder.substr(first_non_ws);
+                        if (vcf_fields.size() >= 5) {
+                            chrom = vcf_fields[0];
+                            try { pos = std::stoi(vcf_fields[1]); } catch (...) { pos = 0; }
+                            id = vcf_fields[2];
+                            ref = vcf_fields[3];
+                            alt = vcf_fields[4];
+                            parsed = true;
+                            qual_field = (vcf_fields.size() > 5) ? vcf_fields[5] : ".";
+                            filter_field = (vcf_fields.size() > 6) ? vcf_fields[6] : ".";
+                            info_field = (vcf_fields.size() > 7) ? vcf_fields[7] : ".";
+                            // Capture sample columns (FORMAT + samples, col 8 onwards)
+                            if (vcf_fields.size() > 8) {
+                                sample_columns = vcf_fields[8];
+                                for (size_t fi = 9; fi < vcf_fields.size(); ++fi) {
+                                    sample_columns += "\t";
+                                    sample_columns += vcf_fields[fi];
+                                }
                             }
                         }
                     }

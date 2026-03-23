@@ -69,6 +69,7 @@ struct HGVSParseResult {
     int start_pos = 0;
     int end_pos = 0;
     int intron_offset = 0;       // For intronic positions like c.123+5
+    int end_intron_offset = 0;   // For end-position intronic offset like c.123+5_130+2del
 
     // Alleles
     std::string ref_allele;
@@ -349,6 +350,9 @@ inline HGVSParseResult parse_coding_hgvs(const std::string& reference, const std
                 result.end_pos = std::stoi(end_str.substr(1));
             } else {
                 result.end_pos = std::stoi(end_str);
+            }
+            if (match[4].matched) {
+                result.end_intron_offset = std::stoi(match[4].str());
             }
         } else {
             result.end_pos = result.start_pos;
@@ -775,7 +779,8 @@ inline std::string chrom_to_refseq_lookup(const std::string& chrom) {
  * Generate genomic HGVS notation (g.)
  */
 inline std::string generate_hgvsg(const std::string& chrom, int pos,
-                                   const std::string& ref, const std::string& alt) {
+                                   const std::string& ref, const std::string& alt,
+                                   const std::string& ref_context = "") {
     std::string result;
 
     // Get RefSeq accession via shared helper
@@ -805,13 +810,17 @@ inline std::string generate_hgvsg(const std::string& chrom, int pos,
         if (!ref.empty() && ref.size() == 1) {
             inserted = alt.substr(1);
         }
-        // Heuristic duplication detection: if the inserted sequence is a single base
-        // and matches the anchor/ref base, it's likely a duplication. For multi-base
-        // insertions, we cannot determine duplication without reference context, so
-        // we use standard ins notation.
+        // Duplication detection: check if the inserted sequence matches the
+        // preceding reference context of the same length.
         bool is_dup = false;
         if (!ref.empty() && ref.size() == 1 && inserted == ref) {
             // Single-base duplication (e.g., ref=A, alt=AA -> dup of A at pos)
+            is_dup = true;
+        } else if (!ref_context.empty() && inserted.size() > 1 &&
+                   ref_context.size() >= inserted.size() &&
+                   ref_context.substr(ref_context.size() - inserted.size()) == inserted) {
+            // Multi-base duplication: inserted sequence matches the preceding
+            // reference context of the same length
             is_dup = true;
         }
         if (is_dup) {
@@ -819,7 +828,8 @@ inline std::string generate_hgvsg(const std::string& chrom, int pos,
             if (ins_len == 1) {
                 result += std::to_string(pos) + "dup";
             } else {
-                result += std::to_string(pos) + "_" + std::to_string(pos + ins_len - 1) + "dup";
+                int dup_start = pos - ins_len + 1;
+                result += std::to_string(dup_start) + "_" + std::to_string(pos) + "dup";
             }
         } else {
             result += std::to_string(pos) + "_" + std::to_string(pos + 1) + "ins" + inserted;

@@ -223,7 +223,25 @@ inline std::vector<ConsequenceType> get_sv_consequences(
         // Determine consequences based on SV type and affected regions
         if (sv.sv_type == SVType::DEL) {
             if (affects_splice) {
-                consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
+                // Check which splice sites are affected (donor vs acceptor)
+                bool hits_donor = false, hits_acceptor = false;
+                for (size_t i = 0; i < transcript.exons.size(); ++i) {
+                    const auto& exon = transcript.exons[i];
+                    // Acceptor site: 2bp before exon start (exon_start-2 to exon_start-1)
+                    if (i > 0 && sv.overlaps(exon.start - 2, exon.start - 1)) {
+                        hits_acceptor = true;
+                    }
+                    // Donor site: 2bp after exon end (exon_end+1 to exon_end+2)
+                    if (i + 1 < transcript.exons.size() && sv.overlaps(exon.end + 1, exon.end + 2)) {
+                        hits_donor = true;
+                    }
+                }
+                if (hits_donor) {
+                    consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
+                }
+                if (hits_acceptor) {
+                    consequences.push_back(ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
+                }
             }
             if (affects_cds) {
                 // Check if frameshift
@@ -236,7 +254,26 @@ inline std::vector<ConsequenceType> get_sv_consequences(
             }
         } else if (sv.sv_type == SVType::INS || sv.sv_type == SVType::DUP || sv.sv_type == SVType::TDUP) {
             if (affects_splice) {
-                consequences.push_back(ConsequenceType::SPLICE_REGION_VARIANT);
+                // Check if insertion/dup falls on the canonical splice dinucleotide
+                bool hits_donor = false, hits_acceptor = false;
+                for (size_t i = 0; i < transcript.exons.size(); ++i) {
+                    const auto& exon = transcript.exons[i];
+                    if (i > 0 && sv.overlaps(exon.start - 2, exon.start - 1)) {
+                        hits_acceptor = true;
+                    }
+                    if (i + 1 < transcript.exons.size() && sv.overlaps(exon.end + 1, exon.end + 2)) {
+                        hits_donor = true;
+                    }
+                }
+                if (hits_donor) {
+                    consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
+                }
+                if (hits_acceptor) {
+                    consequences.push_back(ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
+                }
+                if (!hits_donor && !hits_acceptor) {
+                    consequences.push_back(ConsequenceType::SPLICE_REGION_VARIANT);
+                }
             }
             if (affects_cds) {
                 if (sv.sv_type == SVType::INS && sv.sv_len == 0) {
@@ -412,7 +449,10 @@ inline StructuralVariant parse_sv_from_vcf(
                 } catch (...) {}
             }
 
-            sv.bnd_mate_forward = (alt.find('[') != std::string::npos);
+            // VCF BND orientation: sequence before brackets = forward on local end
+            // t[p[ or t]p] = forward (bases before first bracket)
+            // ]p]t or [p[t = reverse complement (bases after last bracket)
+            sv.bnd_mate_forward = (bracket_pos > 0);
         }
     }
 
@@ -420,7 +460,7 @@ inline StructuralVariant parse_sv_from_vcf(
     if (sv.sv_type == SVType::UNKNOWN) {
         if (ref.size() > alt.size()) {
             sv.sv_type = SVType::DEL;
-            sv.sv_len = static_cast<int>(ref.size()) - static_cast<int>(alt.size());
+            sv.sv_len = -(static_cast<int>(ref.size()) - static_cast<int>(alt.size()));
             sv.end = pos + static_cast<int>(ref.size()) - 1;
         } else if (alt.size() > ref.size()) {
             sv.sv_type = SVType::INS;

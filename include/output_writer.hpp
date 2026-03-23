@@ -18,6 +18,7 @@
 #include <set>
 #include <sstream>
 #include <cctype>
+#include <cstdio>
 #include <zlib.h>
 
 namespace vep {
@@ -57,7 +58,7 @@ struct AnnotationStats {
 
     void add(const VariantAnnotation& ann) {
         total_variants++;
-        if (!ann.gene_symbol.empty()) {
+        if (!ann.consequences.empty()) {
             annotated_variants++;
         }
 
@@ -188,7 +189,7 @@ inline std::string format_protein_position(const VariantAnnotation& ann, const s
     if (cl != ann.custom_annotations.end() && !cl->second.empty()) {
         try {
             int cds_len = std::stoi(cl->second);
-            if (cds_len > 0) s += "/" + std::to_string(cds_len / 3);
+            if (cds_len >= 3) s += "/" + std::to_string((cds_len / 3) - 1);
         } catch (...) {}
     }
     return s;
@@ -551,8 +552,14 @@ private:
         }
 
         // Compute variant-level end position
-        int end_pos = first.position + static_cast<int>(first.ref_allele.size()) - 1;
-        if (end_pos < first.position) end_pos = first.position;
+        // For insertions (empty or "-" ref), end_pos == start position
+        int end_pos;
+        if (first.ref_allele.empty() || first.ref_allele == "-") {
+            end_pos = first.position;
+        } else {
+            end_pos = first.position + static_cast<int>(first.ref_allele.size()) - 1;
+            if (end_pos < first.position) end_pos = first.position;
+        }
 
         std::ostringstream json;
         json << "  {\n";
@@ -1039,7 +1046,15 @@ private:
                 case '\n': result += "\\n"; break;
                 case '\r': result += "\\r"; break;
                 case '\t': result += "\\t"; break;
-                default: result += c; break;
+                default:
+                    if (static_cast<unsigned char>(c) < 0x20) {
+                        char buf[8];
+                        std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                        result += buf;
+                    } else {
+                        result += c;
+                    }
+                    break;
             }
         }
         return result;

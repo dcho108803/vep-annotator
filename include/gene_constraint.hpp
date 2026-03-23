@@ -48,12 +48,12 @@ struct GeneConstraint {
     double syn_z = -1.0;
 
     // Expected/observed counts
-    int exp_lof = 0;
-    int obs_lof = 0;
-    int exp_mis = 0;
-    int obs_mis = 0;
-    int exp_syn = 0;
-    int obs_syn = 0;
+    double exp_lof = 0.0;
+    double obs_lof = 0.0;
+    double exp_mis = 0.0;
+    double obs_mis = 0.0;
+    double exp_syn = 0.0;
+    double obs_syn = 0.0;
 
     // CDS metrics
     int cds_length = 0;
@@ -215,12 +215,12 @@ public:
             constraint.syn_z = parse_double("syn_z");
 
             // Counts
-            constraint.exp_lof = parse_int("exp_lof");
-            constraint.obs_lof = parse_int("obs_lof");
-            constraint.exp_mis = parse_int("exp_mis");
-            constraint.obs_mis = parse_int("obs_mis");
-            constraint.exp_syn = parse_int("exp_syn");
-            constraint.obs_syn = parse_int("obs_syn");
+            constraint.exp_lof = parse_double("exp_lof");
+            constraint.obs_lof = parse_double("obs_lof");
+            constraint.exp_mis = parse_double("exp_mis");
+            constraint.obs_mis = parse_double("obs_mis");
+            constraint.exp_syn = parse_double("exp_syn");
+            constraint.obs_syn = parse_double("obs_syn");
 
             // CDS metrics
             constraint.cds_length = parse_int("cds_length");

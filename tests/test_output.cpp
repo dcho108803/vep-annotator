@@ -174,7 +174,7 @@ TEST(AnnotationStats, AddUnannotatedVariant) {
     stats.add(ann);
 
     EXPECT_EQ(stats.total_variants, 1);
-    EXPECT_EQ(stats.annotated_variants, 0);  // gene_symbol is empty
+    EXPECT_EQ(stats.annotated_variants, 1);  // has consequences (intergenic_variant)
     EXPECT_EQ(stats.consequence_counts["intergenic_variant"], 1);
     EXPECT_EQ(stats.impact_counts["MODIFIER"], 1);
     EXPECT_TRUE(stats.biotype_counts.empty());  // biotype is empty
@@ -196,7 +196,7 @@ TEST(AnnotationStats, AddMultipleVariants) {
     stats.add(ann3);
 
     EXPECT_EQ(stats.total_variants, 3);
-    EXPECT_EQ(stats.annotated_variants, 2);
+    EXPECT_EQ(stats.annotated_variants, 3);  // all have consequences
     EXPECT_EQ(stats.consequence_counts["missense_variant"], 1);
     EXPECT_EQ(stats.consequence_counts["synonymous_variant"], 1);
     EXPECT_EQ(stats.consequence_counts["intergenic_variant"], 1);
@@ -313,7 +313,7 @@ TEST(FormatProteinPosition, PositionWithCDSLength) {
     ann.protein_position = 179;
     ann.custom_annotations["CDS_LENGTH"] = "1182";
     // CDS_LENGTH / 3 = 394
-    EXPECT_EQ(format_protein_position(ann, "-"), "179/394");
+    EXPECT_EQ(format_protein_position(ann, "-"), "179/393");
 }
 
 TEST(FormatProteinPosition, ZeroReturnsDash) {
@@ -637,7 +637,7 @@ TEST_F(TSVWriterTest, MultiBasePositionRanges) {
     // CDS position range with total
     EXPECT_NE(content.find("543-545/1182"), std::string::npos);
     // Protein position range with total (1182/3 = 394)
-    EXPECT_NE(content.find("181-182/394"), std::string::npos);
+    EXPECT_NE(content.find("181-182/393"), std::string::npos);
 }
 
 TEST_F(TSVWriterTest, FlagsInExtra) {
@@ -718,7 +718,7 @@ TEST_F(TSVWriterTest, StatsTracking) {
 
     const auto& stats = writer.get_stats();
     EXPECT_EQ(stats.total_variants, 2);
-    EXPECT_EQ(stats.annotated_variants, 1);
+    EXPECT_EQ(stats.annotated_variants, 2);  // both have consequences
 }
 
 TEST_F(TSVWriterTest, WriteMultipleAnnotations) {
@@ -1355,7 +1355,7 @@ TEST_F(JSONWriterTest, StatsTracking) {
 
     const auto& stats = writer.get_stats();
     EXPECT_EQ(stats.total_variants, 2);
-    EXPECT_EQ(stats.annotated_variants, 1);
+    EXPECT_EQ(stats.annotated_variants, 2);  // both have consequences
 }
 
 
@@ -1978,7 +1978,7 @@ TEST_F(VCFWriterTest, StatsTracking) {
 
     const auto& stats = writer.get_stats();
     EXPECT_EQ(stats.total_variants, 2);
-    EXPECT_EQ(stats.annotated_variants, 1);
+    EXPECT_EQ(stats.annotated_variants, 2);  // both have consequences
 }
 
 TEST_F(VCFWriterTest, PositionRangesInCSQ) {
@@ -1997,7 +1997,7 @@ TEST_F(VCFWriterTest, PositionRangesInCSQ) {
     // CDS position with range and total
     EXPECT_NE(content.find("543-545/1182"), std::string::npos);
     // Protein position with range and total (1182/3 = 394)
-    EXPECT_NE(content.find("181-182/394"), std::string::npos);
+    EXPECT_NE(content.find("181-182/393"), std::string::npos);
 }
 
 TEST_F(VCFWriterTest, EmptyPositionsInCSQ) {

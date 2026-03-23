@@ -555,6 +555,8 @@ GFF3Database::GFF3Database(
     gzFile gz = nullptr;
     std::ifstream file;
 
+    char buffer[65536];
+
     if (is_gzipped) {
         gz = gzopen(path.c_str(), "rb");
         if (!gz) {
@@ -562,7 +564,6 @@ GFF3Database::GFF3Database(
             return;
         }
 
-        char buffer[65536];
         read_line = [&gz, &buffer](std::string& line) -> bool {
             if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;

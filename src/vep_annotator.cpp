@@ -2387,7 +2387,16 @@ void VEPAnnotator::populate_transcript_metadata(
     VariantAnnotation& ann) {
 
     // Generate HGVSg (genomic-level, same for all transcripts)
-    ann.hgvsg = generate_hgvsg(chrom, pos, ref, alt);
+    // Fetch preceding reference context for multi-base dup detection
+    std::string ref_context;
+    if (reference_ && alt.size() > ref.size()) {
+        int ctx_len = static_cast<int>(alt.size() - ref.size());
+        int ctx_start = pos - ctx_len + 1;
+        if (ctx_start >= 1) {
+            ref_context = reference_->get_sequence(chrom, ctx_start, pos);
+        }
+    }
+    ann.hgvsg = generate_hgvsg(chrom, pos, ref, alt, ref_context);
 
     // Add CCDS and protein IDs if available
     if (!transcript.ccds_id.empty()) {
@@ -2719,7 +2728,6 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 int incomplete_start = cds_length - (cds_length % 3) + 1;
                 if (cds_pos >= incomplete_start) {
                     consequences.push_back(ConsequenceType::INCOMPLETE_TERMINAL_CODON_VARIANT);
-                    return consequences;
                 }
             }
 

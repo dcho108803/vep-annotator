@@ -1,6 +1,6 @@
 # VEP Annotator
 
-A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VEP)](https://www.ensembl.org/vep). Achieves ~99.9% feature parity with the Perl VEP while running **50-170x faster**. All annotation is performed locally using standard data files — no API calls required.
+A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VEP)](https://www.ensembl.org/vep). Achieves ~99.9% feature parity with the Perl VEP while running **75-115x faster**. All annotation is performed locally using standard data files — no API calls required.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
@@ -55,7 +55,7 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 
 ## Features
 
-**Core annotation** — All 38 SO consequence types with impact classification, HGVS notation (HGVSc/HGVSp/HGVSg), CDS/protein position calculation, codon changes, 3' shifting, and structural variant annotation (DEL, DUP, INS, INV, CNV, BND).
+**Core annotation** — All 39 SO consequence types with impact classification, HGVS notation (HGVSc/HGVSp/HGVSg), CDS/protein position calculation, codon changes, 3' shifting, and structural variant annotation (DEL, DUP, INS, INV, CNV, BND).
 
 **Transcript selection** — `--pick`, `--per_gene`, `--pick_allele`, `--flag_pick`, `--most_severe` with MANE Select/Plus Clinical, canonical, TSL, APPRIS, and CCDS ranking.
 
@@ -65,14 +65,14 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 
 | Source | Flag | Description |
 |--------|------|-------------|
-| dbNSFP | `--dbnsfp FILE` | 35+ pathogenicity scores (SIFT, PolyPhen-2, CADD, REVEL, AlphaMissense, etc.), conservation, population frequencies |
+| dbNSFP | `--dbnsfp FILE` | 35+ pathogenicity scores (SIFT, PolyPhen-2, CADD, REVEL, AlphaMissense, etc.), conservation, population frequencies. Use `--dbnsfp-fields` to select fields or presets (`essential`/`pathogenicity`/`conservation`/`all`). |
 | SpliceAI | `--spliceai FILE` | Deep learning splice predictions |
 | MaxEntScan | `--maxentscan` | Splice site scoring (algorithmic, no data file) |
 | dbscSNV | `--dbscsnv FILE` | Splice variant predictions (ada_score, rf_score) |
 | PhyloP | `--phylop FILE` | Conservation (100-way vertebrate alignment) |
 | PhastCons | `--phastcons FILE` | Conservation (probability of negative selection) |
 | GERP++ | `--gerp FILE` | Genomic Evolutionary Rate Profiling |
-| Regulatory | `--regulatory FILE` | Ensembl Regulatory Build (promoters, enhancers, TFBS) |
+| Regulatory | `--regulatory FILE` | Ensembl Regulatory Build (promoters, enhancers, TFBS). Use `--cell_type LIST` to filter. |
 | Pfam | `--pfam FILE` | Protein family domain annotations |
 | InterPro | `--interpro FILE` | Integrated protein domain database |
 | LOFTEE | `--loftee` | Loss-of-function HC/LC classification |
@@ -309,6 +309,32 @@ cd build && ./vep_tests
 
 </details>
 
+<details>
+<summary><strong>Annotation Sources</strong></summary>
+
+| Option | Description |
+|--------|-------------|
+| `--dbnsfp FILE` | dbNSFP database (tabix-indexed .txt.gz) |
+| `--dbnsfp-fields FIELDS` | Fields to extract (or preset: `essential`/`pathogenicity`/`conservation`/`all`) |
+| `--spliceai FILE` | SpliceAI VCF file (tabix-indexed) |
+| `--maxentscan` | Enable MaxEntScan splice site scoring (algorithmic) |
+| `--dbscsnv FILE` | dbscSNV file (tabix-indexed) |
+| `--phylop FILE` | PhyloP bigWig file |
+| `--phastcons FILE` | PhastCons bigWig file |
+| `--gerp FILE` | GERP++ bigWig file |
+| `--regulatory FILE` | Ensembl Regulatory Build GFF3 file |
+| `--cell_type LIST` | Cell type filter for regulatory (comma-separated) |
+| `--pfam FILE` | Pfam domain annotations TSV |
+| `--interpro FILE` | InterPro domain annotations TSV |
+| `--loftee` | Enable LOFTEE-style LoF classification |
+| `--nmd` | Enable NMD prediction |
+| `--loftool FILE` | LoFtool gene constraint scores |
+| `--annotation NAME:VCF[:FIELDS]` | Add in-memory VCF annotation source |
+| `--annotation-tabix NAME:VCF[:FIELDS]` | Add tabix-indexed VCF source |
+| `--custom FILE,NAME,TYPE,OVERLAP,COORDS,FIELDS` | Perl VEP-compatible custom source |
+
+</details>
+
 ## Output Format
 
 ### TSV Columns
@@ -497,13 +523,14 @@ This C++ implementation uses **local files exclusively** (GTF + FASTA) rather th
 | Feature | Perl VEP | C++ VEP |
 |---------|----------|---------|
 | `--everything` + regulatory | Auto-includes from cache | Requires explicit `--regulatory FILE` |
-| `--check-existing` | Uses cache | Requires explicit VCF path |
+| `--check_existing` | Uses cache | Requires explicit VCF path |
 | `--sift` / `--polyphen` | Scores from cache | Scores from `--dbnsfp`; flags control display only |
 | `--domains` | From cache | Requires `--pfam` / `--interpro` files |
 | `--fork N` | Perl `fork()` processes | C++ `std::thread` + work-stealing |
 | `--minimal` VCF output | Preserves original alleles | Writes minimized alleles |
 | Plugin system | Perl plugin ecosystem | C++ shared libraries (`.so`/`.dylib`) |
 | `filter_vep` regex | Full Perl regex | Substring matching (`string::find`) |
+| HGVS multi-base duplications | Full `dup` notation | May use `ins` instead of `dup` |
 
 </details>
 

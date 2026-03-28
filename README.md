@@ -4,7 +4,7 @@ A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VE
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![Tests](https://img.shields.io/badge/tests-702%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1014%20passing-brightgreen.svg)]()
 
 ## Features
 
@@ -325,21 +325,22 @@ Benchmarked on 100,000 chr22 variants (Release build, Apple Silicon M-series):
 
 ## Testing
 
-The project includes 702 GoogleTest unit tests:
+The project includes 1014 GoogleTest unit tests:
 
 | Test Suite | Tests | Coverage |
 |------------|------:|----------|
-| Filter VEP | 186 | Operators, expressions, conditions, pipeline |
-| Output Writers | 162 | TSV/JSON/VCF formatting, escaping, stats |
-| CLI Utilities | 114 | Variant parsing, allele trimming, config parsing |
-| Transcript Filter | 101 | Pick modes, filtering, ranking criteria |
-| HGVS | 45 | Parsing, generation, notation types |
-| Consequences | 29 | SO terms, impact levels, ranking |
+| Filter VEP | 206 | Operators, expressions, conditions, pipeline, edge cases |
+| Output Writers | 197 | TSV/JSON/VCF formatting, escaping, stats, position formatting |
+| CLI Utilities | 144 | Variant parsing, allele trimming, config parsing, format detection |
+| Transcript Filter | 121 | Pick modes, filtering, ranking, APPRIS/TSL, complex scenarios |
+| HGVS | 90 | Parsing, HGVSg generation, SPDI, RefSeq mapping, edge cases |
+| Consequences | 84 | SO terms, impact levels, ranking, variant class, display terms |
+| Structural Variants | 60 | SV types, BND parsing, consequences, overlap, properties |
+| Annotation Sources | 40 | LOFTEE, NMD, MaxEntScan, dbNSFP, source manager, domains |
+| Codon Table | 35 | Translation, MT codons, completeness, case handling, edge cases |
 | Exon/Intron Numbers | 25 | Position calculation, formatting |
-| Structural Variants | 18 | SV types, consequences, properties |
 | SpliceAI | 12 | Score parsing, cutoffs, thread safety |
-| Codon Table | 10 | Translation, start/stop codons, mitochondria |
-| **Total** | **702** | |
+| **Total** | **1014** | |
 
 ```bash
 cd build

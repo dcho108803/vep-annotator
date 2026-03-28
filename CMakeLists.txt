@@ -225,6 +225,7 @@ if(BUILD_TESTS)
         tests/test_output.cpp
         tests/test_structural_variant.cpp
         tests/test_exon_intron.cpp
+        tests/test_annotation_sources.cpp
     )
     target_link_libraries(vep_tests
         PRIVATE

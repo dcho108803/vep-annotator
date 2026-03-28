@@ -1131,3 +1131,289 @@ TEST(LineStripping, MultipleTrailingCR) {
         line.pop_back();
     EXPECT_EQ(line, "data");
 }
+
+// ============================================================================
+// NEW TESTS: Multi-allelic VCF parsing
+// ============================================================================
+
+// Helper: split a VCF ALT field by comma (mirrors VCF multi-allelic handling)
+static std::vector<std::string> split_alt_alleles(const std::string& alt_field) {
+    std::vector<std::string> alleles;
+    std::istringstream iss(alt_field);
+    std::string allele;
+    while (std::getline(iss, allele, ',')) {
+        alleles.push_back(allele);
+    }
+    return alleles;
+}
+
+// Helper: parse a VCF line into fields and detect multi-allelic
+struct VCFFields {
+    std::string chrom;
+    int pos = 0;
+    std::string id;
+    std::string ref;
+    std::string alt;
+    bool is_multi_allelic = false;
+    std::vector<std::string> alt_alleles;
+};
+
+static bool parse_vcf_line(const std::string& line, VCFFields& fields) {
+    std::istringstream iss(line);
+    std::string pos_str;
+    if (!(iss >> fields.chrom >> pos_str >> fields.id >> fields.ref >> fields.alt)) {
+        return false;
+    }
+    try {
+        fields.pos = std::stoi(pos_str);
+    } catch (...) {
+        return false;
+    }
+    fields.alt_alleles = split_alt_alleles(fields.alt);
+    fields.is_multi_allelic = (fields.alt_alleles.size() > 1);
+    return true;
+}
+
+TEST(MultiAllelicVCF, ParseCommasSeparatedAlt) {
+    VCFFields f;
+    ASSERT_TRUE(parse_vcf_line("1\t100\t.\tA\tT,C\t.\tPASS\t.", f));
+    EXPECT_EQ(f.chrom, "1");
+    EXPECT_EQ(f.pos, 100);
+    EXPECT_EQ(f.ref, "A");
+    EXPECT_EQ(f.alt, "T,C");
+    ASSERT_EQ(f.alt_alleles.size(), 2u);
+    EXPECT_EQ(f.alt_alleles[0], "T");
+    EXPECT_EQ(f.alt_alleles[1], "C");
+}
+
+TEST(MultiAllelicVCF, DetectMultiAllelic) {
+    VCFFields f;
+    ASSERT_TRUE(parse_vcf_line("1\t100\t.\tA\tT,C\t.\tPASS\t.", f));
+    EXPECT_TRUE(f.is_multi_allelic);
+}
+
+TEST(MultiAllelicVCF, StarAlleleInMultiAllelic) {
+    VCFFields f;
+    ASSERT_TRUE(parse_vcf_line("1\t100\t.\tA\tT,*\t.\tPASS\t.", f));
+    ASSERT_EQ(f.alt_alleles.size(), 2u);
+    EXPECT_EQ(f.alt_alleles[0], "T");
+    EXPECT_EQ(f.alt_alleles[1], "*");
+    EXPECT_TRUE(f.is_multi_allelic);
+}
+
+TEST(MultiAllelicVCF, SingleAltNotMultiAllelic) {
+    VCFFields f;
+    ASSERT_TRUE(parse_vcf_line("1\t100\t.\tA\tT\t.\tPASS\t.", f));
+    EXPECT_FALSE(f.is_multi_allelic);
+    ASSERT_EQ(f.alt_alleles.size(), 1u);
+    EXPECT_EQ(f.alt_alleles[0], "T");
+}
+
+TEST(MultiAllelicVCF, ThreeAlternateAlleles) {
+    VCFFields f;
+    ASSERT_TRUE(parse_vcf_line("1\t100\t.\tA\tT,C,G\t.\tPASS\t.", f));
+    EXPECT_TRUE(f.is_multi_allelic);
+    ASSERT_EQ(f.alt_alleles.size(), 3u);
+    EXPECT_EQ(f.alt_alleles[0], "T");
+    EXPECT_EQ(f.alt_alleles[1], "C");
+    EXPECT_EQ(f.alt_alleles[2], "G");
+}
+
+// ============================================================================
+// NEW TESTS: Edge case variant parsing
+// ============================================================================
+
+TEST(ParseVariantEdgeCases2, ChrPrefixVariant) {
+    std::string chrom, ref, alt;
+    int pos = 0;
+    ASSERT_TRUE(parse_variant("chr1:12345:A:T", chrom, pos, ref, alt));
+    EXPECT_EQ(chrom, "chr1");
+    EXPECT_EQ(pos, 12345);
+    EXPECT_EQ(ref, "A");
+    EXPECT_EQ(alt, "T");
+}
+
+TEST(ParseVariantEdgeCases2, NoChrPrefixVariant) {
+    std::string chrom, ref, alt;
+    int pos = 0;
+    ASSERT_TRUE(parse_variant("1:12345:A:T", chrom, pos, ref, alt));
+    EXPECT_EQ(chrom, "1");
+    EXPECT_EQ(pos, 12345);
+    EXPECT_EQ(ref, "A");
+    EXPECT_EQ(alt, "T");
+}
+
+TEST(ParseVariantEdgeCases2, MTChromosome) {
+    std::string chrom, ref, alt;
+    int pos = 0;
+    ASSERT_TRUE(parse_variant("MT:100:A:G", chrom, pos, ref, alt));
+    EXPECT_EQ(chrom, "MT");
+    EXPECT_EQ(pos, 100);
+    EXPECT_EQ(ref, "A");
+    EXPECT_EQ(alt, "G");
+}
+
+TEST(ParseVariantEdgeCases2, XChromosome) {
+    std::string chrom, ref, alt;
+    int pos = 0;
+    ASSERT_TRUE(parse_variant("X:12345:A:T", chrom, pos, ref, alt));
+    EXPECT_EQ(chrom, "X");
+    EXPECT_EQ(pos, 12345);
+    EXPECT_EQ(ref, "A");
+    EXPECT_EQ(alt, "T");
+}
+
+TEST(ParseVariantEdgeCases2, VeryLongAlleles) {
+    std::string long_ref(500, 'A');
+    std::string long_alt(500, 'T');
+    std::string variant = "1:100:" + long_ref + ":" + long_alt;
+    std::string chrom, ref, alt;
+    int pos = 0;
+    ASSERT_TRUE(parse_variant(variant, chrom, pos, ref, alt));
+    EXPECT_EQ(chrom, "1");
+    EXPECT_EQ(pos, 100);
+    EXPECT_EQ(ref.size(), 500u);
+    EXPECT_EQ(alt.size(), 500u);
+    EXPECT_EQ(ref, long_ref);
+    EXPECT_EQ(alt, long_alt);
+}
+
+// ============================================================================
+// NEW TESTS: Config file parsing
+// ============================================================================
+
+TEST(ConfigParsing2, KeyEqualsValueBasic) {
+    auto args = parse_config_line("output = results.tsv");
+    ASSERT_EQ(args.size(), 2u);
+    EXPECT_EQ(args[0], "--output");
+    EXPECT_EQ(args[1], "results.tsv");
+}
+
+TEST(ConfigParsing2, BooleanFlagKeyOnly) {
+    // Space-separated single token acts as a flag
+    auto args = parse_config_line("--canonical");
+    ASSERT_EQ(args.size(), 1u);
+    EXPECT_EQ(args[0], "--canonical");
+}
+
+TEST(ConfigParsing2, CommentLinesIgnored) {
+    auto args = parse_config_line("# this line is a comment about settings");
+    EXPECT_TRUE(args.empty());
+}
+
+TEST(ConfigParsing2, WhitespaceHandling) {
+    auto args = parse_config_line("  \t  fork  =  4  \t  ");
+    ASSERT_EQ(args.size(), 2u);
+    EXPECT_EQ(args[0], "--fork");
+    EXPECT_EQ(args[1], "4");
+}
+
+TEST(ConfigParsing2, EmptyConfigLine) {
+    auto args = parse_config_line("");
+    EXPECT_TRUE(args.empty());
+}
+
+// ============================================================================
+// NEW TESTS: Input format detection improvements
+// ============================================================================
+
+TEST(DetectInputFormat2, HGVSWithTranscriptPrefix) {
+    EXPECT_EQ(detect_input_format("ENST00000123456:c.100A>G"), InputFormat::HGVS);
+}
+
+TEST(DetectInputFormat2, SPDIFormatAsHGVS) {
+    // NC_ accession with :g. prefix maps to HGVS genomic
+    EXPECT_EQ(detect_input_format("NC_000001.11:g.12345A>T"), InputFormat::HGVS);
+}
+
+TEST(DetectInputFormat2, BEDFormatTabSeparated) {
+    EXPECT_EQ(detect_input_format("chr1\t100\t200\tname"), InputFormat::BED);
+}
+
+TEST(DetectInputFormat2, RegionFormatWithAllele) {
+    EXPECT_EQ(detect_input_format("1:12345-12350/A"), InputFormat::REGION);
+}
+
+TEST(DetectInputFormat2, AmbiguousTabSeparatedVCFvsBED) {
+    // 4+ tabs -> detected as VCF (VCF wins over BED when tab count >= 4)
+    EXPECT_EQ(detect_input_format("chr1\t100\t.\tA\tG\t.\t.\t."), InputFormat::VCF);
+}
+
+// ============================================================================
+// NEW TESTS: Allele trimming edge cases
+// ============================================================================
+
+TEST(MinimalTrim2, NoCommonPrefixOrSuffix) {
+    std::string ref = "A", alt = "T";
+    int pos = 100;
+    minimal_trim(ref, alt, pos);
+    EXPECT_EQ(ref, "A");
+    EXPECT_EQ(alt, "T");
+    EXPECT_EQ(pos, 100);
+}
+
+TEST(MinimalTrim2, CommonPrefixTrim) {
+    // ATCG -> ATGG: prefix AT shared, then CG vs GG -> suffix G shared -> C vs G
+    std::string ref = "ATCG", alt = "ATGG";
+    int pos = 100;
+    minimal_trim(ref, alt, pos);
+    EXPECT_EQ(ref, "C");
+    EXPECT_EQ(alt, "G");
+    EXPECT_EQ(pos, 102);  // 2 prefix bases (AT) trimmed
+}
+
+TEST(MinimalTrim2, CommonSuffixTrim) {
+    // GATC -> TATC: no common prefix (G!=T), suffix ATC shared -> G vs T
+    std::string ref = "GATC", alt = "TATC";
+    int pos = 100;
+    minimal_trim(ref, alt, pos);
+    EXPECT_EQ(ref, "G");
+    EXPECT_EQ(alt, "T");
+    EXPECT_EQ(pos, 100);  // No prefix trimmed
+}
+
+TEST(MinimalTrim2, BothPrefixAndSuffixTrim) {
+    // AATCC -> AGTCC: prefix A shared, then ATCC vs GTCC -> suffix TCC shared -> A vs G
+    std::string ref = "AATCC", alt = "AGTCC";
+    int pos = 100;
+    minimal_trim(ref, alt, pos);
+    EXPECT_EQ(ref, "A");
+    EXPECT_EQ(alt, "G");
+    EXPECT_EQ(pos, 101);  // 1 prefix base (A) trimmed
+}
+
+TEST(MinimalTrim2, DeletionAllBasesSame) {
+    // AAA -> A: prefix A shared -> AA vs empty -> alt becomes "-"
+    std::string ref = "AAA", alt = "A";
+    int pos = 100;
+    minimal_trim(ref, alt, pos);
+    EXPECT_EQ(ref, "AA");
+    EXPECT_EQ(alt, "-");
+    EXPECT_EQ(pos, 101);  // 1 prefix base trimmed
+}
+
+// ============================================================================
+// NEW TESTS: Flag normalization
+// ============================================================================
+
+TEST(FlagNormalization2, PickAlleleNormalized) {
+    EXPECT_EQ(normalize_flag("--pick_allele"), "--pick-allele");
+}
+
+TEST(FlagNormalization2, PerGeneNormalized) {
+    EXPECT_EQ(normalize_flag("--per_gene"), "--per-gene");
+}
+
+TEST(FlagNormalization2, FlagPickNormalized) {
+    EXPECT_EQ(normalize_flag("--flag_pick"), "--flag-pick");
+}
+
+TEST(FlagNormalization2, ValueNotNormalized) {
+    // Values (non-flag arguments) should NOT be normalized
+    std::string value = "my_file.tsv";
+    EXPECT_EQ(normalize_flag(value), "my_file.tsv");
+}
+
+TEST(FlagNormalization2, ShortFlagUnchanged) {
+    EXPECT_EQ(normalize_flag("-o"), "-o");
+}

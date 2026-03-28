@@ -1929,3 +1929,481 @@ TEST(TranscriptFilterCombined, BiotypeFiltThenPickAlleleGene) {
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0].gene_id, "ENSG00000141510");
 }
+
+// ============================================================================
+// NEW TESTS: APPRIS ranking details
+// ============================================================================
+
+TEST(ApprisRankingNew, FullRankingOrder) {
+    // principal_1 < principal_2 < principal_3 < alternative_1 < alternative_2
+    EXPECT_LT(compare_appris("principal_1", "principal_2"), 0);
+    EXPECT_LT(compare_appris("principal_2", "principal_3"), 0);
+    EXPECT_LT(compare_appris("principal_3", "alternative_1"), 0);
+    EXPECT_LT(compare_appris("alternative_1", "alternative_2"), 0);
+    // And the reverse
+    EXPECT_GT(compare_appris("alternative_2", "alternative_1"), 0);
+    EXPECT_GT(compare_appris("alternative_1", "principal_3"), 0);
+}
+
+TEST(ApprisRankingNew, EmptyStringComparison) {
+    // Empty string has score 100, so it should be worse than any value
+    EXPECT_LT(compare_appris("principal_1", ""), 0);
+    EXPECT_LT(compare_appris("alternative_5", ""), 0);
+    EXPECT_GT(compare_appris("", "principal_1"), 0);
+    EXPECT_GT(compare_appris("", "alternative_5"), 0);
+    EXPECT_EQ(compare_appris("", ""), 0);
+}
+
+TEST(ApprisRankingNew, CaseSensitivity) {
+    // The compare_appris function uses find(), which is case-sensitive.
+    // "PRINCIPAL_1" should NOT match "principal_1" find.
+    // Score of "PRINCIPAL_1": doesn't match principal_1 through principal_5,
+    // doesn't match alternative_1 through alternative_5,
+    // doesn't contain "principal" or "alternative" (uppercase vs lowercase)
+    // So it gets score 50.
+    int score_upper = compare_appris("PRINCIPAL_1", "principal_1");
+    // principal_1 has score 1, PRINCIPAL_1 has score 50 -> 50 - 1 = 49
+    EXPECT_GT(score_upper, 0);  // uppercase is worse because find is case-sensitive
+}
+
+TEST(ApprisRankingNew, ApprisInPickOrderRanking) {
+    TranscriptFilterConfig config;
+    config.pick = true;
+    config.pick_order = {PickCriteria::APPRIS, PickCriteria::RANK};
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation p3 = make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    p3.custom_annotations["APPRIS"] = "principal_3";
+    anns.push_back(p3);
+
+    VariantAnnotation p1 = make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    p1.custom_annotations["APPRIS"] = "principal_1";
+    anns.push_back(p1);
+
+    VariantAnnotation alt1 = make_annotation(
+        "ENST00000333333", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::STOP_GAINED}, Impact::HIGH);
+    alt1.custom_annotations["APPRIS"] = "alternative_1";
+    anns.push_back(alt1);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    // principal_1 should win because APPRIS is first in pick_order
+    EXPECT_EQ(result[0].transcript_id, "ENST00000222222");
+}
+
+// ============================================================================
+// NEW TESTS: TSL ranking
+// ============================================================================
+
+TEST(TSLRankingNew, TSL1PreferredOverTSL5) {
+    TranscriptFilterConfig config;
+    config.pick = true;
+    config.pick_order = {PickCriteria::TSL};
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation tsl5 = make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl5.custom_annotations["TSL"] = "5";
+    anns.push_back(tsl5);
+
+    VariantAnnotation tsl1 = make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl1.custom_annotations["TSL"] = "1";
+    anns.push_back(tsl1);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].transcript_id, "ENST00000222222");
+}
+
+TEST(TSLRankingNew, TSL0OrUnknownHandling) {
+    // TSL 0 or not set is treated as worst (score 10)
+    TranscriptFilterConfig config;
+    config.pick = true;
+    config.pick_order = {PickCriteria::TSL};
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    // No TSL set -> tsl=0 -> score 10 (worst)
+    VariantAnnotation no_tsl = make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    anns.push_back(no_tsl);
+
+    // TSL=0 explicitly
+    VariantAnnotation tsl0 = make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl0.custom_annotations["TSL"] = "0";
+    anns.push_back(tsl0);
+
+    // TSL=4 is better than unknown/0
+    VariantAnnotation tsl4 = make_annotation(
+        "ENST00000333333", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl4.custom_annotations["TSL"] = "4";
+    anns.push_back(tsl4);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    // TSL 4 is best among 0, unknown, and 4
+    EXPECT_EQ(result[0].transcript_id, "ENST00000333333");
+}
+
+TEST(TSLRankingNew, TSLComparisonAcrossTranscripts) {
+    TranscriptFilterConfig config;
+    config.pick = true;
+    config.pick_order = {PickCriteria::TSL};
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation tsl3 = make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl3.custom_annotations["TSL"] = "3";
+    anns.push_back(tsl3);
+
+    VariantAnnotation tsl2 = make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl2.custom_annotations["TSL"] = "2";
+    anns.push_back(tsl2);
+
+    VariantAnnotation tsl1 = make_annotation(
+        "ENST00000333333", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl1.custom_annotations["TSL"] = "1";
+    anns.push_back(tsl1);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].transcript_id, "ENST00000333333");
+}
+
+TEST(TSLRankingNew, TSLInCombinedPickCriteria) {
+    // TSL is used as a tiebreaker when CANONICAL is tied
+    TranscriptFilterConfig config;
+    config.pick = true;
+    config.pick_order = {PickCriteria::CANONICAL, PickCriteria::TSL, PickCriteria::RANK};
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    // Both canonical, different TSL
+    VariantAnnotation tsl3 = make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::STOP_GAINED}, Impact::HIGH);
+    tsl3.custom_annotations["TSL"] = "3";
+    anns.push_back(tsl3);
+
+    VariantAnnotation tsl1 = make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    tsl1.custom_annotations["TSL"] = "1";
+    anns.push_back(tsl1);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    // Both canonical (tied), TSL 1 wins over TSL 3
+    EXPECT_EQ(result[0].transcript_id, "ENST00000222222");
+}
+
+// ============================================================================
+// NEW TESTS: Complex pick scenarios
+// ============================================================================
+
+TEST(ComplexPickNew, PickAlleleWithMultiAllelic) {
+    TranscriptFilterConfig config;
+    config.pick_allele = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    // Allele A>T: two transcripts
+    anns.push_back(make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE, "A", "T"));
+    anns.push_back(make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::INTRON_VARIANT}, Impact::MODIFIER, "A", "T"));
+    // Allele A>G: two transcripts
+    anns.push_back(make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::STOP_GAINED}, Impact::HIGH, "A", "G"));
+    anns.push_back(make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::SYNONYMOUS_VARIANT}, Impact::LOW, "A", "G"));
+
+    auto result = filter.filter(anns);
+    // Should get exactly one per allele
+    ASSERT_EQ(result.size(), 2u);
+
+    std::set<std::string> alleles;
+    for (const auto& r : result) {
+        alleles.insert(r.ref_allele + ">" + r.alt_allele);
+    }
+    EXPECT_EQ(alleles.size(), 2u);
+    EXPECT_TRUE(alleles.count("A>T"));
+    EXPECT_TRUE(alleles.count("A>G"));
+}
+
+TEST(ComplexPickNew, PerGeneWithMultipleGenes) {
+    TranscriptFilterConfig config;
+    config.per_gene = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    // Gene TP53: 3 transcripts
+    anns.push_back(make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE));
+    anns.push_back(make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::INTRON_VARIANT}, Impact::MODIFIER));
+    anns.push_back(make_annotation(
+        "ENST00000333333", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::SYNONYMOUS_VARIANT}, Impact::LOW));
+    // Gene BRCA1: 2 transcripts
+    anns.push_back(make_annotation(
+        "ENST00000444444", "BRCA1", "ENSG00000012048", "protein_coding",
+        true, {ConsequenceType::STOP_GAINED}, Impact::HIGH));
+    anns.push_back(make_annotation(
+        "ENST00000555555", "BRCA1", "ENSG00000012048", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE));
+    // Gene KRAS: 1 transcript
+    anns.push_back(make_annotation(
+        "ENST00000666666", "KRAS", "ENSG00000133703", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE));
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 3u);
+
+    std::set<std::string> gene_ids;
+    for (const auto& r : result) {
+        gene_ids.insert(r.gene_id);
+    }
+    EXPECT_EQ(gene_ids.size(), 3u);
+    EXPECT_TRUE(gene_ids.count("ENSG00000141510"));
+    EXPECT_TRUE(gene_ids.count("ENSG00000012048"));
+    EXPECT_TRUE(gene_ids.count("ENSG00000133703"));
+}
+
+TEST(ComplexPickNew, PickWithAllCriteriaTied) {
+    // When all criteria are tied, the implementation falls through
+    // to whatever order std::sort produces
+    TranscriptFilterConfig config;
+    config.pick = true;
+    config.pick_order = {
+        PickCriteria::CANONICAL, PickCriteria::APPRIS, PickCriteria::TSL,
+        PickCriteria::BIOTYPE, PickCriteria::CCDS, PickCriteria::RANK,
+        PickCriteria::LENGTH
+    };
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    // Two identical annotations except transcript_id and length
+    VariantAnnotation short_tx = make_rich_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE,
+        1, "principal_1", true, 2000);
+    anns.push_back(short_tx);
+
+    VariantAnnotation long_tx = make_rich_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE,
+        1, "principal_1", true, 5000);
+    anns.push_back(long_tx);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    // Everything tied except LENGTH -> longer transcript wins
+    EXPECT_EQ(result[0].transcript_id, "ENST00000222222");
+}
+
+TEST(ComplexPickNew, FlagPickKeepsAllButMarks) {
+    TranscriptFilterConfig config;
+    config.flag_pick = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    anns.push_back(make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::INTRON_VARIANT}, Impact::MODIFIER));
+    anns.push_back(make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::SYNONYMOUS_VARIANT}, Impact::LOW));
+    anns.push_back(make_mane_annotation(
+        "ENST00000333333", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE));
+
+    auto result = filter.filter(anns);
+    // All 3 kept
+    ASSERT_EQ(result.size(), 3u);
+
+    // Exactly one has PICK=1
+    int pick_count = 0;
+    std::string picked_id;
+    for (const auto& r : result) {
+        auto it = r.custom_annotations.find("PICK");
+        if (it != r.custom_annotations.end() && it->second == "1") {
+            ++pick_count;
+            picked_id = r.transcript_id;
+        }
+    }
+    EXPECT_EQ(pick_count, 1);
+}
+
+TEST(ComplexPickNew, PickAlleleGeneCombination) {
+    TranscriptFilterConfig config;
+    config.pick_allele_gene = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    // Gene TP53, allele A>T: 2 transcripts
+    anns.push_back(make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE, "A", "T"));
+    anns.push_back(make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::INTRON_VARIANT}, Impact::MODIFIER, "A", "T"));
+    // Gene TP53, allele A>G: 1 transcript
+    anns.push_back(make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::STOP_GAINED}, Impact::HIGH, "A", "G"));
+    // Gene BRCA1, allele A>T: 1 transcript
+    anns.push_back(make_annotation(
+        "ENST00000444444", "BRCA1", "ENSG00000012048", "protein_coding",
+        true, {ConsequenceType::SYNONYMOUS_VARIANT}, Impact::LOW, "A", "T"));
+
+    auto result = filter.filter(anns);
+    // 3 groups: TP53:A>T, TP53:A>G, BRCA1:A>T
+    ASSERT_EQ(result.size(), 3u);
+}
+
+TEST(ComplexPickNew, MostSevereReturnsSingle) {
+    TranscriptFilterConfig config;
+    config.most_severe = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    anns.push_back(make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::INTRON_VARIANT}, Impact::MODIFIER));
+    anns.push_back(make_annotation(
+        "ENST00000222222", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::SYNONYMOUS_VARIANT}, Impact::LOW));
+    anns.push_back(make_annotation(
+        "ENST00000333333", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::SPLICE_ACCEPTOR_VARIANT}, Impact::HIGH));
+    anns.push_back(make_annotation(
+        "ENST00000444444", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE));
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].consequences[0], ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
+}
+
+// ============================================================================
+// NEW TESTS: Exclude predicted
+// ============================================================================
+
+TEST(ExcludePredictedNew, XM_TranscriptExcluded) {
+    TranscriptFilterConfig config;
+    config.exclude_predicted = true;
+    TranscriptFilter filter(config);
+
+    VariantAnnotation ann = make_annotation(
+        "XM_005268172.3", "TP53", "ENSG00000141510", "protein_coding",
+        false, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    EXPECT_FALSE(filter.passes_filter(ann));
+}
+
+TEST(ExcludePredictedNew, XR_TranscriptExcluded) {
+    TranscriptFilterConfig config;
+    config.exclude_predicted = true;
+    TranscriptFilter filter(config);
+
+    VariantAnnotation ann = make_annotation(
+        "XR_002958765.1", "LOC102723996", "ENSG00000200000", "lncRNA",
+        false, {ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT}, Impact::MODIFIER);
+    EXPECT_FALSE(filter.passes_filter(ann));
+}
+
+TEST(ExcludePredictedNew, NM_TranscriptNotExcluded) {
+    TranscriptFilterConfig config;
+    config.exclude_predicted = true;
+    TranscriptFilter filter(config);
+
+    VariantAnnotation ann = make_annotation(
+        "NM_000546.6", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    EXPECT_TRUE(filter.passes_filter(ann));
+}
+
+// ============================================================================
+// NEW TESTS: Biotype filtering
+// ============================================================================
+
+TEST(BiotypeFilterNew, ProteinCodingIncluded) {
+    TranscriptFilterConfig config;
+    config.biotypes.insert("protein_coding");
+    TranscriptFilter filter(config);
+
+    VariantAnnotation ann = make_annotation(
+        "ENST00000269305", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    EXPECT_TRUE(filter.passes_filter(ann));
+}
+
+TEST(BiotypeFilterNew, ProcessedPseudogeneExcluded) {
+    TranscriptFilterConfig config;
+    config.biotypes.insert("protein_coding");
+    config.biotypes.insert("lncRNA");
+    TranscriptFilter filter(config);
+
+    VariantAnnotation ann = make_annotation(
+        "ENST00000600000", "TP53P1", "ENSG00000300000", "processed_pseudogene",
+        false, {ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT}, Impact::MODIFIER);
+    EXPECT_FALSE(filter.passes_filter(ann));
+}
+
+TEST(BiotypeFilterNew, MultipleBiotypesInFilter) {
+    TranscriptFilterConfig config;
+    config.biotypes.insert("protein_coding");
+    config.biotypes.insert("lncRNA");
+    config.biotypes.insert("miRNA");
+    TranscriptFilter filter(config);
+
+    VariantAnnotation pc = make_annotation(
+        "ENST00000111111", "TP53", "ENSG00000141510", "protein_coding",
+        true, {ConsequenceType::MISSENSE_VARIANT}, Impact::MODERATE);
+    EXPECT_TRUE(filter.passes_filter(pc));
+
+    VariantAnnotation lnc = make_annotation(
+        "ENST00000222222", "LINC01234", "ENSG00000200000", "lncRNA",
+        false, {ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT}, Impact::MODIFIER);
+    EXPECT_TRUE(filter.passes_filter(lnc));
+
+    VariantAnnotation mirna = make_annotation(
+        "ENST00000333333", "MIR1234", "ENSG00000300000", "miRNA",
+        false, {ConsequenceType::MATURE_MIRNA_VARIANT}, Impact::MODIFIER);
+    EXPECT_TRUE(filter.passes_filter(mirna));
+
+    VariantAnnotation snorna = make_annotation(
+        "ENST00000444444", "SNORD1234", "ENSG00000400000", "snoRNA",
+        false, {ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT}, Impact::MODIFIER);
+    EXPECT_FALSE(filter.passes_filter(snorna));
+
+    VariantAnnotation pseudo = make_annotation(
+        "ENST00000555555", "PSEUDO1", "ENSG00000500000", "processed_pseudogene",
+        false, {ConsequenceType::NON_CODING_TRANSCRIPT_EXON_VARIANT}, Impact::MODIFIER);
+    EXPECT_FALSE(filter.passes_filter(pseudo));
+}

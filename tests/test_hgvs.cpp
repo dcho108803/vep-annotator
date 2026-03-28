@@ -399,3 +399,383 @@ TEST(RESTRegion, NegativeStrand) {
     EXPECT_EQ(result.strand, -1);
     EXPECT_EQ(result.alt_allele, "A");
 }
+
+
+// ============================================================================
+// NEW TESTS: HGVSg generation (10 tests)
+// ============================================================================
+
+TEST(HGVSgGeneration, SNV) {
+    std::string result = generate_hgvsg("1", 12345, "A", "T");
+    EXPECT_EQ(result, "NC_000001.11:g.12345A>T");
+}
+
+TEST(HGVSgGeneration, DeletionSingleBase) {
+    // VCF-style: REF=AT, ALT=A -> delete T at pos 101
+    std::string result = generate_hgvsg("7", 100, "AT", "A");
+    EXPECT_NE(result.find("del"), std::string::npos);
+    // After stripping the anchor base: del at 101
+    EXPECT_NE(result.find("101"), std::string::npos);
+}
+
+TEST(HGVSgGeneration, DeletionMultiBase) {
+    // VCF-style: REF=ATCG, ALT=A -> delete TCG at 101-103
+    std::string result = generate_hgvsg("7", 100, "ATCG", "A");
+    EXPECT_NE(result.find("del"), std::string::npos);
+    EXPECT_NE(result.find("101_103"), std::string::npos);
+}
+
+TEST(HGVSgGeneration, Insertion) {
+    // VCF-style: REF=A, ALT=ATG -> insert TG after pos 100
+    std::string result = generate_hgvsg("7", 100, "A", "ATG");
+    EXPECT_NE(result.find("ins"), std::string::npos);
+    EXPECT_NE(result.find("TG"), std::string::npos);
+}
+
+TEST(HGVSgGeneration, DuplicationSingle) {
+    // REF=A, ALT=AA with ref_context matching -> single base dup
+    std::string result = generate_hgvsg("7", 100, "A", "AA", "A");
+    EXPECT_NE(result.find("dup"), std::string::npos);
+    EXPECT_NE(result.find("100"), std::string::npos);
+}
+
+TEST(HGVSgGeneration, ComplexDelins) {
+    // REF=ATG, ALT=TC -> delins with anchor strip
+    std::string result = generate_hgvsg("7", 100, "ATG", "TC");
+    EXPECT_NE(result.find("delins"), std::string::npos);
+    // After anchor base strip (A matches): 101_102delinsC
+    EXPECT_NE(result.find("C"), std::string::npos);
+}
+
+TEST(HGVSgGeneration, ChrPrefixHandling) {
+    // "chr1" should normalize via chrom_to_refseq_lookup
+    std::string result = generate_hgvsg("chr1", 12345, "A", "T");
+    EXPECT_EQ(result, "NC_000001.11:g.12345A>T");
+}
+
+TEST(HGVSgGeneration, LargePositionNumber) {
+    std::string result = generate_hgvsg("1", 248956422, "G", "C");
+    EXPECT_EQ(result, "NC_000001.11:g.248956422G>C");
+}
+
+TEST(HGVSgGeneration, MNV) {
+    // Multi-nucleotide variant: REF=AT, ALT=GC -> delinsGC
+    std::string result = generate_hgvsg("1", 100, "AT", "GC");
+    EXPECT_NE(result.find("delins"), std::string::npos);
+    EXPECT_NE(result.find("GC"), std::string::npos);
+}
+
+TEST(HGVSgGeneration, EmptyAltDeletion) {
+    // Empty alt = deletion of entire ref
+    std::string result = generate_hgvsg("1", 100, "ATG", "");
+    EXPECT_NE(result.find("del"), std::string::npos);
+    EXPECT_NE(result.find("100_102"), std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: HGVS parsing edge cases (10 tests)
+// ============================================================================
+
+TEST(HGVSParsingEdge, CodingNegativePosition5UTR) {
+    auto result = parse_hgvs("NM_001:c.-10A>G");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::SUBSTITUTION);
+    EXPECT_EQ(result.start_pos, -10);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "G");
+}
+
+TEST(HGVSParsingEdge, CodingStarPosition3UTR) {
+    auto result = parse_hgvs("NM_001:c.*5del");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELETION);
+    EXPECT_EQ(result.start_pos, 5);
+}
+
+TEST(HGVSParsingEdge, NonCodingNotation) {
+    auto result = parse_hgvs("NR_001:n.100A>G");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);  // n. parsed via same path as c.
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "G");
+}
+
+TEST(HGVSParsingEdge, MitochondrialNotation) {
+    auto result = parse_hgvs("NC_012920:m.100A>G");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::GENOMIC);  // m. parsed via genomic path
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "G");
+}
+
+TEST(HGVSParsingEdge, IntronicLargeOffset) {
+    auto result = parse_hgvs("ENST00001:c.100+1000A>G");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.intron_offset, 1000);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "G");
+}
+
+TEST(HGVSParsingEdge, ProteinFrameshift) {
+    auto result = parse_hgvs("ENSP00001:p.Ala100fs");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.protein_pos, 100);
+    EXPECT_EQ(result.alt_aa, "fs");
+}
+
+TEST(HGVSParsingEdge, ProteinExtension) {
+    // Extension notation: Ter100Glnext*? - complex, may not fully parse
+    auto result = parse_hgvs("ENSP00001:p.Ter100Gln");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.ref_aa, "Ter");
+    EXPECT_EQ(result.protein_pos, 100);
+}
+
+TEST(HGVSParsingEdge, ProteinSynonymous) {
+    auto result = parse_hgvs("ENSP00001:p.Ala100=");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.alt_aa, "Ala");
+    EXPECT_EQ(result.protein_pos, 100);
+}
+
+TEST(HGVSParsingEdge, CompoundDelins) {
+    // Range delins (c.100_102delinsATG) is complex; parser may not fully support it
+    auto result = parse_hgvs("ENST:c.100_102delinsATG");
+    // Just verify it doesn't crash and returns a result
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    // The parser may not fully parse range delins; that's a known limitation
+}
+
+TEST(HGVSParsingEdge, InvalidHGVSStrings) {
+    auto r1 = parse_hgvs("");
+    EXPECT_FALSE(r1.valid);
+
+    auto r2 = parse_hgvs("no-colon-here");
+    EXPECT_FALSE(r2.valid);
+
+    auto r3 = parse_hgvs("X:z.invalid");
+    EXPECT_FALSE(r3.valid);
+
+    auto r4 = parse_hgvs("X:c.");
+    EXPECT_FALSE(r4.valid);
+}
+
+
+// ============================================================================
+// NEW TESTS: SPDI format edge cases (5 tests)
+// ============================================================================
+
+TEST(SPDIEdge, StandardSPDI) {
+    auto result = parse_spdi("NC_000001.11:12345:A:T");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.chromosome, "1");
+    EXPECT_EQ(result.position, 12346);  // 0-based -> 1-based
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "T");
+}
+
+TEST(SPDIEdge, DeletionSPDI) {
+    auto result = parse_spdi("NC_000001.11:12345:ATG:");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.chromosome, "1");
+    EXPECT_EQ(result.position, 12346);
+    EXPECT_EQ(result.ref_allele, "ATG");
+    EXPECT_EQ(result.alt_allele, "");
+}
+
+TEST(SPDIEdge, InsertionSPDI) {
+    auto result = parse_spdi("NC_000001.11:12345::ATG");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.ref_allele, "");
+    EXPECT_EQ(result.alt_allele, "ATG");
+}
+
+TEST(SPDIEdge, InvalidSPDINotEnoughColons) {
+    auto result = parse_spdi("NC_000001.11:12345:A");
+    EXPECT_FALSE(result.valid);
+
+    auto result2 = parse_spdi("incomplete");
+    EXPECT_FALSE(result2.valid);
+}
+
+TEST(SPDIEdge, ChromosomeNameExtraction) {
+    auto r1 = parse_spdi("NC_000007.14:100:A:T");
+    EXPECT_TRUE(r1.valid);
+    EXPECT_EQ(r1.chromosome, "7");
+
+    auto r2 = parse_spdi("NC_000023.11:100:A:T");
+    EXPECT_TRUE(r2.valid);
+    EXPECT_EQ(r2.chromosome, "X");
+
+    auto r3 = parse_spdi("NC_012920.1:100:A:T");
+    EXPECT_TRUE(r3.valid);
+    EXPECT_EQ(r3.chromosome, "MT");
+}
+
+
+// ============================================================================
+// NEW TESTS: Ensembl format (5 tests)
+// ============================================================================
+
+TEST(EnsemblFormatEdge, Standard) {
+    auto result = parse_ensembl_format("1 12345 12345 A/T 1");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.chromosome, "1");
+    EXPECT_EQ(result.position, 12345);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "T");
+}
+
+TEST(EnsemblFormatEdge, DeletionWithDash) {
+    auto result = parse_ensembl_format("1 12345 12347 ATG/- 1");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.ref_allele, "ATG");
+    EXPECT_EQ(result.alt_allele, "");
+}
+
+TEST(EnsemblFormatEdge, InsertionWithDash) {
+    auto result = parse_ensembl_format("1 12345 12344 -/ATG 1");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.ref_allele, "");
+    EXPECT_EQ(result.alt_allele, "ATG");
+}
+
+TEST(EnsemblFormatEdge, MinusStrandComplement) {
+    auto result = parse_ensembl_format("1 12345 12345 A/T -1");
+    EXPECT_TRUE(result.valid);
+    // Minus strand: A->T complement, T->A complement
+    EXPECT_EQ(result.ref_allele, "T");
+    EXPECT_EQ(result.alt_allele, "A");
+}
+
+TEST(EnsemblFormatEdge, WithIdField) {
+    // Ensembl format does not formally have an ID field; extra fields after strand are ignored
+    auto result = parse_ensembl_format("1 12345 12345 G/C +");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.chromosome, "1");
+    EXPECT_EQ(result.ref_allele, "G");
+    EXPECT_EQ(result.alt_allele, "C");
+}
+
+
+// ============================================================================
+// NEW TESTS: REST region format (3 tests)
+// ============================================================================
+
+TEST(RESTRegionEdge, StandardFormat) {
+    auto result = parse_rest_region("1:12345-12345:1/T");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.chromosome, "1");
+    EXPECT_EQ(result.position, 12345);
+    EXPECT_EQ(result.end_position, 12345);
+    EXPECT_EQ(result.strand, 1);
+    EXPECT_EQ(result.alt_allele, "T");
+}
+
+TEST(RESTRegionEdge, RangeFormat) {
+    auto result = parse_rest_region("1:12345-12350:1/T");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.chromosome, "1");
+    EXPECT_EQ(result.position, 12345);
+    EXPECT_EQ(result.end_position, 12350);
+    EXPECT_EQ(result.strand, 1);
+    EXPECT_EQ(result.alt_allele, "T");
+}
+
+TEST(RESTRegionEdge, InvalidFormat) {
+    EXPECT_FALSE(is_rest_region_format("1:12345:1/T"));
+    EXPECT_FALSE(is_rest_region_format("invalid_string"));
+    EXPECT_FALSE(is_rest_region_format(""));
+}
+
+
+// ============================================================================
+// NEW TESTS: RefSeq mapping (4 tests)
+// ============================================================================
+
+TEST(RefSeqMappingEdge, Chromosome1GRCh38) {
+    EXPECT_EQ(refseq_to_chromosome("NC_000001.11"), "1");
+}
+
+TEST(RefSeqMappingEdge, ChromosomeX) {
+    EXPECT_EQ(refseq_to_chromosome("NC_000023.11"), "X");
+}
+
+TEST(RefSeqMappingEdge, ChromosomeY) {
+    EXPECT_EQ(refseq_to_chromosome("NC_000024.10"), "Y");
+}
+
+TEST(RefSeqMappingEdge, MitochondrialChr) {
+    EXPECT_EQ(refseq_to_chromosome("NC_012920.1"), "MT");
+}
+
+
+// ============================================================================
+// NEW TESTS: HGVSg with chr prefix handling (3 tests)
+// ============================================================================
+
+TEST(HGVSgChrPrefix, ChrVsBareChrom) {
+    std::string with_chr = generate_hgvsg("chr1", 12345, "A", "T");
+    std::string without_chr = generate_hgvsg("1", 12345, "A", "T");
+    // Both should produce the same RefSeq-based HGVSg
+    EXPECT_EQ(with_chr, without_chr);
+    EXPECT_EQ(with_chr, "NC_000001.11:g.12345A>T");
+}
+
+TEST(HGVSgChrPrefix, ChromosomeXY) {
+    std::string x_result = generate_hgvsg("X", 50000, "C", "G");
+    EXPECT_EQ(x_result, "NC_000023.11:g.50000C>G");
+
+    std::string y_result = generate_hgvsg("Y", 25000, "G", "A");
+    EXPECT_EQ(y_result, "NC_000024.10:g.25000G>A");
+}
+
+TEST(HGVSgChrPrefix, MitochondrialChrM) {
+    std::string mt_result = generate_hgvsg("MT", 100, "A", "G");
+    EXPECT_EQ(mt_result, "NC_012920.1:g.100A>G");
+}
+
+
+// ============================================================================
+// NEW TESTS: HGVS variant type from notation (5 tests)
+// ============================================================================
+
+TEST(HGVSVariantTypeFromNotation, SubstitutionIndicator) {
+    auto result = parse_hgvs("NC_000001.11:g.100A>T");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::SUBSTITUTION);
+}
+
+TEST(HGVSVariantTypeFromNotation, DeletionIndicator) {
+    auto result = parse_hgvs("NC_000001.11:g.100_105del");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELETION);
+}
+
+TEST(HGVSVariantTypeFromNotation, InsertionIndicator) {
+    auto result = parse_hgvs("NC_000001.11:g.100_101insACG");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::INSERTION);
+}
+
+TEST(HGVSVariantTypeFromNotation, DuplicationIndicator) {
+    auto result = parse_hgvs("NC_000001.11:g.100_105dup");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DUPLICATION);
+}
+
+TEST(HGVSVariantTypeFromNotation, DelinsIndicator) {
+    auto result = parse_hgvs("NC_000001.11:g.100_105delinsATG");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELINS);
+}

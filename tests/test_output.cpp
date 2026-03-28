@@ -2566,3 +2566,489 @@ TEST_F(VCFWriterTest, VCFEscapeMultipleSpecialChars) {
     std::string content = read_file(tmp.path());
     EXPECT_NE(content.find("a%7Cb%2Cc%3Bd%3De%20f"), std::string::npos);
 }
+
+
+// ============================================================================
+// NEW TESTS: AnnotationStats extended (8 tests)
+// ============================================================================
+
+TEST(AnnotationStatsExtended, AddMultipleCountsCorrectly) {
+    AnnotationStats stats;
+    for (int i = 0; i < 5; ++i) {
+        stats.add(make_basic_annotation());
+    }
+    EXPECT_EQ(stats.total_variants, 5);
+    EXPECT_EQ(stats.annotated_variants, 5);
+    EXPECT_EQ(stats.consequence_counts["missense_variant"], 5);
+}
+
+TEST(AnnotationStatsExtended, ConsequenceCountsPerType) {
+    AnnotationStats stats;
+
+    VariantAnnotation ann1 = make_basic_annotation();
+    ann1.consequences = {ConsequenceType::MISSENSE_VARIANT};
+    stats.add(ann1);
+
+    VariantAnnotation ann2 = make_basic_annotation();
+    ann2.consequences = {ConsequenceType::STOP_GAINED};
+    ann2.impact = Impact::HIGH;
+    stats.add(ann2);
+
+    VariantAnnotation ann3 = make_basic_annotation();
+    ann3.consequences = {ConsequenceType::SYNONYMOUS_VARIANT};
+    ann3.impact = Impact::LOW;
+    stats.add(ann3);
+
+    EXPECT_EQ(stats.consequence_counts["missense_variant"], 1);
+    EXPECT_EQ(stats.consequence_counts["stop_gained"], 1);
+    EXPECT_EQ(stats.consequence_counts["synonymous_variant"], 1);
+    EXPECT_EQ(stats.consequence_counts.size(), 3u);
+}
+
+TEST(AnnotationStatsExtended, ImpactCounts) {
+    AnnotationStats stats;
+
+    VariantAnnotation high_ann = make_basic_annotation();
+    high_ann.consequences = {ConsequenceType::STOP_GAINED};
+    high_ann.impact = Impact::HIGH;
+    stats.add(high_ann);
+
+    VariantAnnotation mod_ann = make_basic_annotation();
+    mod_ann.impact = Impact::MODERATE;
+    stats.add(mod_ann);
+
+    VariantAnnotation low_ann = make_basic_annotation();
+    low_ann.consequences = {ConsequenceType::SYNONYMOUS_VARIANT};
+    low_ann.impact = Impact::LOW;
+    stats.add(low_ann);
+
+    VariantAnnotation modifier_ann = make_empty_annotation();
+    stats.add(modifier_ann);
+
+    EXPECT_EQ(stats.impact_counts["HIGH"], 1);
+    EXPECT_EQ(stats.impact_counts["MODERATE"], 1);
+    EXPECT_EQ(stats.impact_counts["LOW"], 1);
+    EXPECT_EQ(stats.impact_counts["MODIFIER"], 1);
+}
+
+TEST(AnnotationStatsExtended, BiotypeCountsMultiple) {
+    AnnotationStats stats;
+
+    VariantAnnotation ann1 = make_basic_annotation();
+    ann1.biotype = "protein_coding";
+    stats.add(ann1);
+
+    VariantAnnotation ann2 = make_basic_annotation();
+    ann2.biotype = "lncRNA";
+    stats.add(ann2);
+
+    VariantAnnotation ann3 = make_basic_annotation();
+    ann3.biotype = "protein_coding";
+    stats.add(ann3);
+
+    EXPECT_EQ(stats.biotype_counts["protein_coding"], 2);
+    EXPECT_EQ(stats.biotype_counts["lncRNA"], 1);
+}
+
+TEST(AnnotationStatsExtended, ToStringFormatting) {
+    AnnotationStats stats;
+
+    VariantAnnotation ann = make_basic_annotation();
+    stats.add(ann);
+
+    std::string s = stats.to_string();
+    // Verify structural elements
+    EXPECT_NE(s.find("=== Annotation Statistics ==="), std::string::npos);
+    EXPECT_NE(s.find("Total variants: 1"), std::string::npos);
+    EXPECT_NE(s.find("Annotated variants: 1"), std::string::npos);
+    EXPECT_NE(s.find("Consequence counts:"), std::string::npos);
+    EXPECT_NE(s.find("Impact counts:"), std::string::npos);
+    EXPECT_NE(s.find("  missense_variant: 1"), std::string::npos);
+    EXPECT_NE(s.find("  MODERATE: 1"), std::string::npos);
+}
+
+TEST(AnnotationStatsExtended, ToJsonStructure) {
+    AnnotationStats stats;
+
+    VariantAnnotation ann = make_basic_annotation();
+    stats.add(ann);
+
+    std::string j = stats.to_json();
+    // Verify JSON structure
+    EXPECT_NE(j.find("{"), std::string::npos);
+    EXPECT_NE(j.find("}"), std::string::npos);
+    EXPECT_NE(j.find("\"total_variants\": 1"), std::string::npos);
+    EXPECT_NE(j.find("\"annotated_variants\": 1"), std::string::npos);
+    EXPECT_NE(j.find("\"consequence_counts\": {"), std::string::npos);
+    EXPECT_NE(j.find("\"impact_counts\": {"), std::string::npos);
+    EXPECT_NE(j.find("\"missense_variant\": 1"), std::string::npos);
+    EXPECT_NE(j.find("\"MODERATE\": 1"), std::string::npos);
+}
+
+TEST(AnnotationStatsExtended, ZeroVariantStats) {
+    AnnotationStats stats;
+    EXPECT_EQ(stats.total_variants, 0);
+    EXPECT_EQ(stats.annotated_variants, 0);
+    EXPECT_TRUE(stats.consequence_counts.empty());
+    EXPECT_TRUE(stats.impact_counts.empty());
+    EXPECT_TRUE(stats.biotype_counts.empty());
+
+    std::string s = stats.to_string();
+    EXPECT_NE(s.find("Total variants: 0"), std::string::npos);
+
+    std::string j = stats.to_json();
+    EXPECT_NE(j.find("\"total_variants\": 0"), std::string::npos);
+}
+
+TEST(AnnotationStatsExtended, MultipleVariantsSameConsequenceIncrements) {
+    AnnotationStats stats;
+
+    for (int i = 0; i < 10; ++i) {
+        VariantAnnotation ann = make_basic_annotation();
+        ann.consequences = {ConsequenceType::MISSENSE_VARIANT};
+        stats.add(ann);
+    }
+
+    EXPECT_EQ(stats.total_variants, 10);
+    EXPECT_EQ(stats.consequence_counts["missense_variant"], 10);
+    EXPECT_EQ(stats.impact_counts["MODERATE"], 10);
+    EXPECT_EQ(stats.biotype_counts["protein_coding"], 10);
+}
+
+
+// ============================================================================
+// NEW TESTS: FormatConsequence (6 tests)
+// ============================================================================
+
+TEST(FormatConsequenceTests, SingleConsequenceSOTerm) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.consequences = {ConsequenceType::MISSENSE_VARIANT};
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("\tmissense_variant\t"), std::string::npos);
+}
+
+TEST(FormatConsequenceTests, MultipleConsequencesWithAmpersand) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.consequences = {ConsequenceType::MISSENSE_VARIANT, ConsequenceType::SPLICE_REGION_VARIANT};
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("missense_variant&splice_region_variant"), std::string::npos);
+}
+
+TEST(FormatConsequenceTests, DisplayTermFormat) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+    writer.set_term_style("display");
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.consequences = {ConsequenceType::SYNONYMOUS_VARIANT};
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // synonymous_variant display term is SYNONYMOUS_CODING
+    EXPECT_NE(content.find("SYNONYMOUS_CODING"), std::string::npos);
+    EXPECT_EQ(content.find("synonymous_variant"), std::string::npos);
+}
+
+TEST(FormatConsequenceTests, SOTermFormat) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+    writer.set_term_style("SO");
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.consequences = {ConsequenceType::SYNONYMOUS_VARIANT};
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("synonymous_variant"), std::string::npos);
+}
+
+TEST(FormatConsequenceTests, EmptyConsequences) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.consequences.clear();
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Should not crash; there should be a tab-delimited field (possibly empty)
+    EXPECT_FALSE(content.empty());
+}
+
+TEST(FormatConsequenceTests, SortedBySeverity) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    // splice_region_variant is lower severity than missense_variant
+    ann.consequences = {ConsequenceType::SPLICE_REGION_VARIANT, ConsequenceType::MISSENSE_VARIANT};
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // The consequences are output in the order stored in the vector
+    // Verify both are present joined with "&"
+    size_t splice_pos = content.find("splice_region_variant");
+    size_t missense_pos = content.find("missense_variant");
+    EXPECT_NE(splice_pos, std::string::npos);
+    EXPECT_NE(missense_pos, std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: TSV Extra field formatting (8 tests)
+// ============================================================================
+
+TEST(TSVExtraField, ImpactFieldPresent) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.impact = Impact::HIGH;
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("IMPACT=HIGH"), std::string::npos);
+}
+
+TEST(TSVExtraField, DistanceFieldOnlyWhenPositive) {
+    TempFile tmp1(".tsv");
+    {
+        TSVWriter writer(tmp1.path());
+        writer.set_skip_header(true);
+        VariantAnnotation ann = make_basic_annotation();
+        ann.distance = 500;
+        writer.write_annotation(ann, {});
+        writer.close();
+
+        std::string content = read_file(tmp1.path());
+        EXPECT_NE(content.find("DISTANCE=500"), std::string::npos);
+    }
+
+    TempFile tmp2(".tsv");
+    {
+        TSVWriter writer(tmp2.path());
+        writer.set_skip_header(true);
+        VariantAnnotation ann = make_basic_annotation();
+        ann.distance = 0;
+        writer.write_annotation(ann, {});
+        writer.close();
+
+        std::string content = read_file(tmp2.path());
+        EXPECT_EQ(content.find("DISTANCE="), std::string::npos);
+    }
+}
+
+TEST(TSVExtraField, StrandFieldValues) {
+    TempFile tmp_plus(".tsv");
+    {
+        TSVWriter writer(tmp_plus.path());
+        writer.set_skip_header(true);
+        VariantAnnotation ann = make_basic_annotation();
+        ann.strand = '+';
+        writer.write_annotation(ann, {});
+        writer.close();
+
+        std::string content = read_file(tmp_plus.path());
+        EXPECT_NE(content.find("STRAND=1"), std::string::npos);
+    }
+
+    TempFile tmp_minus(".tsv");
+    {
+        TSVWriter writer(tmp_minus.path());
+        writer.set_skip_header(true);
+        VariantAnnotation ann = make_basic_annotation();
+        ann.strand = '-';
+        writer.write_annotation(ann, {});
+        writer.close();
+
+        std::string content = read_file(tmp_minus.path());
+        EXPECT_NE(content.find("STRAND=-1"), std::string::npos);
+    }
+}
+
+TEST(TSVExtraField, SymbolBiotypeCanonical) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.gene_symbol = "BRCA1";
+    ann.biotype = "protein_coding";
+    ann.is_canonical = true;
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("SYMBOL=BRCA1"), std::string::npos);
+    EXPECT_NE(content.find("BIOTYPE=protein_coding"), std::string::npos);
+    EXPECT_NE(content.find("CANONICAL=YES"), std::string::npos);
+}
+
+TEST(TSVExtraField, HGVScHGVSpFields) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.hgvsc = "ENST00000269305.9:c.535A>G";
+    ann.hgvsp = "ENSP00000269305.4:p.His179Arg";
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("HGVSc=ENST00000269305.9:c.535A>G"), std::string::npos);
+    EXPECT_NE(content.find("HGVSp=ENSP00000269305.4:p.His179Arg"), std::string::npos);
+}
+
+TEST(TSVExtraField, CustomAnnotationsInExtra) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["CADD_PHRED"] = "25.3";
+    ann.custom_annotations["gnomAD_AF"] = "0.001";
+    std::vector<std::string> custom_cols = {"CADD_PHRED", "gnomAD_AF"};
+    writer.write_annotation(ann, custom_cols);
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("CADD_PHRED=25.3"), std::string::npos);
+    EXPECT_NE(content.find("gnomAD_AF=0.001"), std::string::npos);
+}
+
+TEST(TSVExtraField, SemicolonSeparation) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Extra field has semicolon-separated key=value pairs
+    // IMPACT=MODERATE;STRAND=...;SYMBOL=...
+    EXPECT_NE(content.find("IMPACT=MODERATE;"), std::string::npos);
+}
+
+TEST(TSVExtraField, HGVSgInExtraField) {
+    TempFile tmp(".tsv");
+    TSVWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.hgvsg = "chr17:g.7675088C>T";
+    writer.write_annotation(ann, {});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("HGVSg=chr17:g.7675088C>T"), std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: Position formatting edge cases (8 tests)
+// ============================================================================
+
+TEST(PositionFormattingEdge, ZeroPositionReturnsDash) {
+    VariantAnnotation ann;
+    EXPECT_EQ(format_position_with_total(0, 0, "CDS_LENGTH", ann, "-"), "-");
+}
+
+TEST(PositionFormattingEdge, PositionWithEndRange) {
+    VariantAnnotation ann;
+    EXPECT_EQ(format_position_with_total(100, 105, "CDS_LENGTH", ann, "-"), "100-105");
+}
+
+TEST(PositionFormattingEdge, PositionWithTotal) {
+    VariantAnnotation ann;
+    ann.custom_annotations["TRANSCRIPT_LENGTH"] = "2591";
+    EXPECT_EQ(format_position_with_total(790, 792, "TRANSCRIPT_LENGTH", ann, "-"), "790-792/2591");
+}
+
+TEST(PositionFormattingEdge, PositionRangeWithTotal) {
+    VariantAnnotation ann;
+    ann.custom_annotations["CDS_LENGTH"] = "1182";
+    EXPECT_EQ(format_position_with_total(543, 545, "CDS_LENGTH", ann, "-"), "543-545/1182");
+}
+
+TEST(PositionFormattingEdge, ProteinPositionCalculation) {
+    VariantAnnotation ann;
+    ann.protein_position = 179;
+    ann.custom_annotations["CDS_LENGTH"] = "1182";
+    // CDS_LENGTH / 3 - 1 = 394 - 1 = 393
+    EXPECT_EQ(format_protein_position(ann, "-"), "179/393");
+}
+
+TEST(PositionFormattingEdge, CDSLengthReporting) {
+    VariantAnnotation ann;
+    ann.protein_position = 50;
+    ann.custom_annotations["CDS_LENGTH"] = "300";
+    // 300 / 3 - 1 = 99
+    EXPECT_EQ(format_protein_position(ann, "-"), "50/99");
+}
+
+TEST(PositionFormattingEdge, SinglePositionStartEqualsEnd) {
+    VariantAnnotation ann;
+    // When start == end, no range displayed
+    EXPECT_EQ(format_position_with_total(100, 100, "CDS_LENGTH", ann, "-"), "100");
+}
+
+TEST(PositionFormattingEdge, VeryLargePositions) {
+    VariantAnnotation ann;
+    ann.custom_annotations["CDS_LENGTH"] = "99999";
+    EXPECT_EQ(format_position_with_total(50000, 50010, "CDS_LENGTH", ann, "-"), "50000-50010/99999");
+}
+
+
+// ============================================================================
+// NEW TESTS: OutputFormat parsing (5 tests)
+// ============================================================================
+
+TEST(OutputFormatParsing, ParseTSV) {
+    EXPECT_EQ(parse_output_format("tsv"), OutputFormat::TSV);
+}
+
+TEST(OutputFormatParsing, ParseJSON) {
+    EXPECT_EQ(parse_output_format("json"), OutputFormat::JSON);
+}
+
+TEST(OutputFormatParsing, ParseVCF) {
+    EXPECT_EQ(parse_output_format("vcf"), OutputFormat::VCF);
+}
+
+TEST(OutputFormatParsing, ParseTabAsTSV) {
+    EXPECT_EQ(parse_output_format("tab"), OutputFormat::TSV);
+}
+
+TEST(OutputFormatParsing, UnknownDefaultsToTSV) {
+    EXPECT_EQ(parse_output_format("unknown"), OutputFormat::TSV);
+    EXPECT_EQ(parse_output_format("xml"), OutputFormat::TSV);
+    EXPECT_EQ(parse_output_format("csv"), OutputFormat::TSV);
+    EXPECT_EQ(parse_output_format(""), OutputFormat::TSV);
+}

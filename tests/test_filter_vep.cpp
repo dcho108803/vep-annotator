@@ -1588,3 +1588,304 @@ TEST(FilterableRecord, HasMissingFieldEdge) {
     auto rec = make_record({{"CHROM", "1"}});
     EXPECT_FALSE(rec.has("NONEXISTENT"));
 }
+
+// ============================================================================
+// NEW TESTS: Complex filter expressions
+// ============================================================================
+
+TEST(ComplexFilterExpr, NegatedNot_ImpactIsHigh) {
+    // "not IMPACT is HIGH" -> field=IMPACT, op=EQUALS, value=HIGH, negated=true
+    FilterCondition cond = parse_filter_expression("not IMPACT is HIGH");
+    EXPECT_EQ(cond.field, "IMPACT");
+    EXPECT_EQ(cond.op, FilterOperator::EQUALS);
+    EXPECT_EQ(cond.value, "HIGH");
+    EXPECT_TRUE(cond.negated);
+
+    // Apply: record with IMPACT=LOW should pass (negated is HIGH -> true)
+    auto rec_low = make_record({{"IMPACT", "LOW"}});
+    EXPECT_TRUE(apply_condition(rec_low, cond));
+
+    // Record with IMPACT=HIGH should fail
+    auto rec_high = make_record({{"IMPACT", "HIGH"}});
+    EXPECT_FALSE(apply_condition(rec_high, cond));
+}
+
+TEST(ComplexFilterExpr, MultipleValuesInList) {
+    // "Consequence in missense_variant,stop_gained,frameshift_variant"
+    FilterCondition cond = parse_filter_expression(
+        "Consequence in missense_variant,stop_gained,frameshift_variant");
+    EXPECT_EQ(cond.field, "Consequence");
+    EXPECT_EQ(cond.op, FilterOperator::IN);
+    ASSERT_EQ(cond.value_list.size(), 3u);
+    EXPECT_EQ(cond.value_list[0], "missense_variant");
+    EXPECT_EQ(cond.value_list[1], "stop_gained");
+    EXPECT_EQ(cond.value_list[2], "frameshift_variant");
+
+    auto rec_miss = make_record({{"Consequence", "missense_variant"}});
+    EXPECT_TRUE(apply_condition(rec_miss, cond));
+    auto rec_stop = make_record({{"Consequence", "stop_gained"}});
+    EXPECT_TRUE(apply_condition(rec_stop, cond));
+    auto rec_syn = make_record({{"Consequence", "synonymous_variant"}});
+    EXPECT_FALSE(apply_condition(rec_syn, cond));
+}
+
+TEST(ComplexFilterExpr, NotInOperator) {
+    // Build a NOT_IN condition manually (parse_filter_expression doesn't
+    // directly support "not in" as a single operator, but we can use
+    // the negated flag with IN)
+    FilterCondition cond;
+    cond.field = "BIOTYPE";
+    cond.op = FilterOperator::NOT_IN;
+    cond.value_list = {"processed_pseudogene", "retained_intron"};
+
+    auto rec_pc = make_record({{"BIOTYPE", "protein_coding"}});
+    EXPECT_TRUE(apply_condition(rec_pc, cond));
+
+    auto rec_pseudo = make_record({{"BIOTYPE", "processed_pseudogene"}});
+    EXPECT_FALSE(apply_condition(rec_pseudo, cond));
+
+    auto rec_retained = make_record({{"BIOTYPE", "retained_intron"}});
+    EXPECT_FALSE(apply_condition(rec_retained, cond));
+}
+
+TEST(ComplexFilterExpr, RegexOperatorSubstring) {
+    // REGEX operator acts as contains (simple substring match)
+    FilterCondition cond("HGVSc", FilterOperator::REGEX, "del");
+
+    auto rec_del = make_record({{"HGVSc", "ENST00000269305.9:c.123del"}});
+    EXPECT_TRUE(apply_condition(rec_del, cond));
+
+    auto rec_ins = make_record({{"HGVSc", "ENST00000269305.9:c.123ins"}});
+    EXPECT_FALSE(apply_condition(rec_ins, cond));
+}
+
+TEST(ComplexFilterExpr, ContainsWithSpecialChars) {
+    // Contains with colon and period characters
+    FilterCondition cond("HGVSp", FilterOperator::CONTAINS, "p.Arg");
+
+    auto rec_match = make_record({{"HGVSp", "ENSP00000269305:p.Arg175His"}});
+    EXPECT_TRUE(apply_condition(rec_match, cond));
+
+    auto rec_no = make_record({{"HGVSp", "ENSP00000269305:p.Gly245Ser"}});
+    EXPECT_FALSE(apply_condition(rec_no, cond));
+}
+
+// ============================================================================
+// NEW TESTS: Quick filter interactions
+// ============================================================================
+
+TEST(QuickFilterInteraction, ConsequenceAndImpactCombined) {
+    // Both consequence_filter and impact_filter must pass (AND logic)
+    FilterConfig config;
+    config.consequence_filter.insert("missense_variant");
+    config.impact_filter.insert("HIGH");
+
+    // Missense is MODERATE, not HIGH -> fails impact
+    auto rec = make_record({{"Consequence", "missense_variant"}, {"IMPACT", "MODERATE"}});
+    EXPECT_FALSE(apply_filter(rec, config));
+
+    // Stop gained is HIGH -> but not in consequence filter
+    auto rec2 = make_record({{"Consequence", "stop_gained"}, {"IMPACT", "HIGH"}});
+    EXPECT_FALSE(apply_filter(rec2, config));
+
+    // Missense + HIGH (unusual but test the logic)
+    auto rec3 = make_record({{"Consequence", "missense_variant"}, {"IMPACT", "HIGH"}});
+    EXPECT_TRUE(apply_filter(rec3, config));
+}
+
+TEST(QuickFilterInteraction, GeneFilterAndCodingOnly) {
+    FilterConfig config;
+    config.gene_filter.insert("TP53");
+    config.coding_only = true;
+
+    // Correct gene, protein_coding -> pass
+    auto rec1 = make_record({{"SYMBOL", "TP53"}, {"BIOTYPE", "protein_coding"}});
+    EXPECT_TRUE(apply_filter(rec1, config));
+
+    // Correct gene, lncRNA -> fails coding_only
+    auto rec2 = make_record({{"SYMBOL", "TP53"}, {"BIOTYPE", "lncRNA"}});
+    EXPECT_FALSE(apply_filter(rec2, config));
+
+    // Wrong gene, protein_coding -> fails gene filter
+    auto rec3 = make_record({{"SYMBOL", "BRCA1"}, {"BIOTYPE", "protein_coding"}});
+    EXPECT_FALSE(apply_filter(rec3, config));
+}
+
+TEST(QuickFilterInteraction, MinAFAndMaxAFRange) {
+    // Filter for rare variants: 0.001 <= AF <= 0.01
+    FilterConfig config;
+    config.min_af = 0.001;
+    config.max_af = 0.01;
+
+    auto rec_in_range = make_record({{"AF", "0.005"}});
+    EXPECT_TRUE(apply_filter(rec_in_range, config));
+
+    auto rec_too_low = make_record({{"AF", "0.0001"}});
+    EXPECT_FALSE(apply_filter(rec_too_low, config));
+
+    auto rec_too_high = make_record({{"AF", "0.05"}});
+    EXPECT_FALSE(apply_filter(rec_too_high, config));
+}
+
+TEST(QuickFilterInteraction, CanonicalAndManeCombined) {
+    FilterConfig config;
+    config.canonical_only = true;
+    config.mane_only = true;
+
+    // Both canonical and MANE -> pass
+    auto rec1 = make_record({{"CANONICAL", "YES"}, {"MANE_SELECT", "NM_000546.6"}});
+    EXPECT_TRUE(apply_filter(rec1, config));
+
+    // Canonical but not MANE -> fail
+    auto rec2 = make_record({{"CANONICAL", "YES"}, {"MANE_SELECT", ""}});
+    EXPECT_FALSE(apply_filter(rec2, config));
+
+    // MANE but not canonical -> fail
+    auto rec3 = make_record({{"CANONICAL", ""}, {"MANE_SELECT", "NM_000546.6"}});
+    EXPECT_FALSE(apply_filter(rec3, config));
+}
+
+TEST(QuickFilterInteraction, AllFiltersDisabledPassesEverything) {
+    FilterConfig config;
+    // Default config: everything disabled/empty
+
+    auto rec = make_record({
+        {"Consequence", "intergenic_variant"},
+        {"IMPACT", "MODIFIER"},
+        {"BIOTYPE", "pseudogene"},
+        {"CANONICAL", ""},
+        {"AF", "0.5"}
+    });
+    EXPECT_TRUE(apply_filter(rec, config));
+    EXPECT_FALSE(config.has_any_filter());
+}
+
+// ============================================================================
+// NEW TESTS: Numeric edge cases
+// ============================================================================
+
+TEST(NumericEdgeCases, VerySmallAFValue) {
+    auto rec = make_record({{"AF", "0.000001"}});  // 1e-6
+    FilterCondition cond("AF", FilterOperator::LESS, "0.001");
+    EXPECT_TRUE(apply_condition(rec, cond));
+
+    FilterCondition cond2("AF", FilterOperator::GREATER, "0.0000001");
+    EXPECT_TRUE(apply_condition(rec, cond2));
+}
+
+TEST(NumericEdgeCases, ExactBoundaryMaxAF) {
+    // AF = 0.01 with max_af = 0.01: AF > max_af is false, so it should pass
+    auto rec = make_record({{"AF", "0.01"}});
+    FilterConfig config;
+    config.max_af = 0.01;
+    // max_af check: af > config.max_af -> 0.01 > 0.01 is false -> passes
+    EXPECT_TRUE(apply_filter(rec, config));
+}
+
+TEST(NumericEdgeCases, NegativeNumberComparison) {
+    auto rec = make_record({{"score", "-5.5"}});
+    FilterCondition cond_lt("score", FilterOperator::LESS, "0");
+    EXPECT_TRUE(apply_condition(rec, cond_lt));
+
+    FilterCondition cond_gt("score", FilterOperator::GREATER, "-10");
+    EXPECT_TRUE(apply_condition(rec, cond_gt));
+
+    FilterCondition cond_eq("score", FilterOperator::EQUALS, "-5.5");
+    EXPECT_TRUE(apply_condition(rec, cond_eq));
+}
+
+TEST(NumericEdgeCases, ScientificNotationValues) {
+    auto rec = make_record({{"AF", "1.5e-3"}});
+    // 1.5e-3 = 0.0015
+    FilterCondition cond("AF", FilterOperator::LESS, "0.01");
+    EXPECT_TRUE(apply_condition(rec, cond));
+
+    FilterCondition cond2("AF", FilterOperator::GREATER, "0.001");
+    EXPECT_TRUE(apply_condition(rec, cond2));
+
+    FilterCondition cond3("AF", FilterOperator::EQUALS, "0.0015");
+    EXPECT_TRUE(apply_condition(rec, cond3));
+}
+
+TEST(NumericEdgeCases, IntegerVsFloatComparison) {
+    // "20" vs "20.0" should be equal numerically
+    auto rec = make_record({{"CADD_phred", "20"}});
+    FilterCondition cond("CADD_phred", FilterOperator::EQUALS, "20.0");
+    EXPECT_TRUE(apply_condition(rec, cond));
+
+    FilterCondition cond_gt("CADD_phred", FilterOperator::GREATER, "20.0");
+    EXPECT_FALSE(apply_condition(rec, cond_gt));
+
+    FilterCondition cond_ge("CADD_phred", FilterOperator::GREATER_EQ, "20.0");
+    EXPECT_TRUE(apply_condition(rec, cond_ge));
+}
+
+// ============================================================================
+// NEW TESTS: Record field access
+// ============================================================================
+
+TEST(RecordFieldAccess, GetMissingFieldReturnsEmptyString) {
+    auto rec = make_record({{"Consequence", "missense_variant"}});
+    EXPECT_EQ(rec.get("NONEXISTENT_FIELD"), "");
+    EXPECT_EQ(rec.get(""), "");
+}
+
+TEST(RecordFieldAccess, HasPresentVsAbsent) {
+    auto rec = make_record({
+        {"Consequence", "missense_variant"},
+        {"SIFT", ""},
+        {"IMPACT", "MODERATE"}
+    });
+    EXPECT_TRUE(rec.has("Consequence"));
+    EXPECT_TRUE(rec.has("IMPACT"));
+    EXPECT_FALSE(rec.has("SIFT"));       // Empty value
+    EXPECT_FALSE(rec.has("PolyPhen"));   // Missing field
+}
+
+TEST(RecordFieldAccess, GetNumericVariousValues) {
+    auto rec = make_record({
+        {"AF", "0.001"},
+        {"NaN_field", "NaN"},
+        {"dot_field", "."},
+        {"NA_field", "NA"},
+        {"empty_field", ""},
+        {"text_field", "deleterious"}
+    });
+
+    EXPECT_DOUBLE_EQ(rec.get_numeric("AF"), 0.001);
+    EXPECT_TRUE(std::isnan(rec.get_numeric("NaN_field")));
+    EXPECT_TRUE(std::isnan(rec.get_numeric("dot_field")));
+    EXPECT_TRUE(std::isnan(rec.get_numeric("NA_field")));
+    EXPECT_TRUE(std::isnan(rec.get_numeric("empty_field")));
+    EXPECT_TRUE(std::isnan(rec.get_numeric("text_field")));
+    EXPECT_TRUE(std::isnan(rec.get_numeric("missing_field")));
+}
+
+TEST(RecordFieldAccess, LargeRecordWithManyFields) {
+    std::map<std::string, std::string> fields;
+    for (int i = 0; i < 100; ++i) {
+        fields["field_" + std::to_string(i)] = "value_" + std::to_string(i);
+    }
+    auto rec = make_record(fields);
+
+    EXPECT_EQ(rec.get("field_0"), "value_0");
+    EXPECT_EQ(rec.get("field_50"), "value_50");
+    EXPECT_EQ(rec.get("field_99"), "value_99");
+    EXPECT_TRUE(rec.has("field_42"));
+    EXPECT_FALSE(rec.has("field_100"));
+}
+
+TEST(RecordFieldAccess, FieldNamesWithColons) {
+    // Custom annotations often use colons (e.g., gnomAD:AF)
+    auto rec = make_record({
+        {"gnomAD:AF", "0.001"},
+        {"dbNSFP:SIFT_score", "0.05"},
+        {"custom:my_field:sub", "value"}
+    });
+
+    EXPECT_EQ(rec.get("gnomAD:AF"), "0.001");
+    EXPECT_DOUBLE_EQ(rec.get_numeric("gnomAD:AF"), 0.001);
+    EXPECT_EQ(rec.get("dbNSFP:SIFT_score"), "0.05");
+    EXPECT_EQ(rec.get("custom:my_field:sub"), "value");
+    EXPECT_TRUE(rec.has("gnomAD:AF"));
+}

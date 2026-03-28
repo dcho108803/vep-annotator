@@ -1,15 +1,15 @@
 # VEP Annotator
 
-A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VEP)](https://www.ensembl.org/vep). Achieves ~99.9% feature parity with the Perl VEP while running **50-70x faster** (single-threaded). All annotation is performed locally using standard data files — no API calls required.
+A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VEP)](https://www.ensembl.org/vep). Achieves ~99.9% feature parity with the Perl VEP while running **50-170x faster**. All annotation is performed locally using standard data files — no API calls required.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![Tests](https://img.shields.io/badge/tests-640%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-702%20passing-brightgreen.svg)]()
 
 ## Features
 
 ### Core Annotation
-- Consequence prediction using Sequence Ontology (SO) terms (all 35+ VEP consequence types)
+- Consequence prediction using Sequence Ontology (SO) terms (all 38 VEP consequence types)
 - Impact classification (HIGH, MODERATE, LOW, MODIFIER)
 - HGVS notation: HGVSc (coding), HGVSp (protein), HGVSg (genomic)
 - CDS/protein position calculation with codon and amino acid changes
@@ -317,19 +317,21 @@ Benchmarked on 100,000 chr22 variants (Release build, Apple Silicon M-series):
 
 ## Testing
 
-The project includes 640 GoogleTest unit tests:
+The project includes 702 GoogleTest unit tests:
 
 | Test Suite | Tests | Coverage |
 |------------|------:|----------|
-| Consequences | 32 | SO terms, impact levels, ranking |
-| Codon Table | 24 | Translation, start/stop codons |
-| HGVS | 24 | Parsing, generation, notation types |
+| Filter VEP | 186 | Operators, expressions, conditions, pipeline |
+| Output Writers | 162 | TSV/JSON/VCF formatting, escaping, stats |
+| CLI Utilities | 114 | Variant parsing, allele trimming, config parsing |
+| Transcript Filter | 101 | Pick modes, filtering, ranking criteria |
+| HGVS | 45 | Parsing, generation, notation types |
+| Consequences | 29 | SO terms, impact levels, ranking |
+| Exon/Intron Numbers | 25 | Position calculation, formatting |
+| Structural Variants | 18 | SV types, consequences, properties |
 | SpliceAI | 12 | Score parsing, cutoffs, thread safety |
-| Filter VEP | 180 | Operators, expressions, conditions, pipeline |
-| Output Writers | 153 | TSV/JSON/VCF formatting, escaping, stats |
-| Transcript Filter | 104 | Pick modes, filtering, ranking criteria |
-| CLI Utilities | 76 | Variant parsing, allele trimming, config parsing |
-| **Total** | **640** | |
+| Codon Table | 10 | Translation, start/stop codons, mitochondria |
+| **Total** | **702** | |
 
 ```bash
 cd build

@@ -105,6 +105,8 @@ public:
                 if (ada_it != record.end() && ada_it->second != ".") {
                     ada = std::stod(ada_it->second);
                 }
+            } catch (...) {}
+            try {
                 if (rf_it != record.end() && rf_it->second != ".") {
                     rf = std::stod(rf_it->second);
                 }

@@ -55,7 +55,7 @@ inline const std::vector<DbNSFPField> DBNSFP_PATHOGENICITY_FIELDS = {
 
     // AlphaMissense
     {"AlphaMissense_score", "AlphaMissense_score", "AlphaMissense score (0-1)", true, true, 0.564},
-    {"AlphaMissense_pred", "AlphaMissense_class", "AlphaMissense prediction (likely_pathogenic/ambiguous/likely_benign)", false, false, -1},
+    {"AlphaMissense_pred", "AlphaMissense_pred", "AlphaMissense prediction (likely_pathogenic/ambiguous/likely_benign)", false, false, -1},
 
     // MetaSVM/MetaLR
     {"MetaSVM_score", "MetaSVM_score", "MetaSVM score", true, true, 0.0},

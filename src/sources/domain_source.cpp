@@ -266,15 +266,11 @@ protected:
         if (fields.size() > 4) entry.domain_name = fields[4];
         if (fields.size() > 5) entry.domain_desc = fields[5];
 
-        // Look for E-value
-        for (size_t i = 6; i < fields.size(); ++i) {
-            if (fields[i].find('e') != std::string::npos ||
-                fields[i].find('E') != std::string::npos) {
-                try {
-                    entry.evalue = std::stod(fields[i]);
-                    break;
-                } catch (...) {}
-            }
+        // Parse E-value from known position (field 6 in Pfam format)
+        if (fields.size() > 6 && !fields[6].empty() && fields[6] != ".") {
+            try {
+                entry.evalue = std::stod(fields[6]);
+            } catch (...) {}
         }
 
         domains_[entry.transcript_id].push_back(entry);

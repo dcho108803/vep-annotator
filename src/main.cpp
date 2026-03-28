@@ -1371,15 +1371,23 @@ int main(int argc, char* argv[]) {
             show_protein = true;
         } else if (arg == "--domains") {
             show_domains = true;
-        } else if (arg == "--sift" && i + 1 < argc) {
-            sift_display = argv[++i];
-            if (sift_display != "p" && sift_display != "s" && sift_display != "b") {
-                sift_display = "b"; // Default to both
+        } else if (arg == "--sift") {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                sift_display = argv[++i];
+                if (sift_display != "p" && sift_display != "s" && sift_display != "b") {
+                    sift_display = "b"; // Default to both
+                }
+            } else {
+                sift_display = "p"; // Default to prediction only when no value given
             }
-        } else if (arg == "--polyphen" && i + 1 < argc) {
-            polyphen_display = argv[++i];
-            if (polyphen_display != "p" && polyphen_display != "s" && polyphen_display != "b") {
-                polyphen_display = "b"; // Default to both
+        } else if (arg == "--polyphen") {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                polyphen_display = argv[++i];
+                if (polyphen_display != "p" && polyphen_display != "s" && polyphen_display != "b") {
+                    polyphen_display = "b"; // Default to both
+                }
+            } else {
+                polyphen_display = "p"; // Default to prediction only when no value given
             }
         } else if (arg == "--humdiv") {
             use_humdiv = true;
@@ -2306,6 +2314,7 @@ int main(int argc, char* argv[]) {
 
             std::string line;
             int variant_count = 0;
+            InputFormat detected_format = InputFormat::UNKNOWN;
 
             // Process pre-read lines first (from header pre-reading phase)
             size_t pre_read_idx = 0;
@@ -2367,7 +2376,6 @@ int main(int argc, char* argv[]) {
                 std::map<std::string, std::string> info_map;
 
                 // Auto-detect input format on first non-header line
-                static InputFormat detected_format = InputFormat::UNKNOWN;
                 if (detected_format == InputFormat::UNKNOWN) {
                     detected_format = detect_input_format(line);
                     if (!quiet_mode && detected_format != InputFormat::VCF) {

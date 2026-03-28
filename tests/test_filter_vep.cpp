@@ -392,10 +392,11 @@ TEST(ApplyCondition, GreaterThanFalseLess) {
     EXPECT_FALSE(apply_condition(rec, cond));
 }
 
-TEST(ApplyCondition, GreaterThanNonNumericReturnsFalse) {
+TEST(ApplyCondition, GreaterThanNonNumericPassesThrough) {
+    // Non-numeric values pass through numeric comparisons (match Perl VEP)
     auto rec = make_record({{"CADD_phred", "."}});
     FilterCondition cond("CADD_phred", FilterOperator::GREATER, "20");
-    EXPECT_FALSE(apply_condition(rec, cond));
+    EXPECT_TRUE(apply_condition(rec, cond));
 }
 
 // --- GREATER_EQ ---
@@ -663,23 +664,25 @@ TEST(ApplyCondition, NegatedExistsFalse) {
 
 // --- Edge cases ---
 
-TEST(ApplyCondition, MissingFieldNumericComparisonReturnsFalse) {
-    // When the field is missing, numeric comparisons should return false
+TEST(ApplyCondition, MissingFieldNumericComparisonPassesThrough) {
+    // Missing fields pass through numeric comparisons (match Perl VEP)
     auto rec = make_record({});
     FilterCondition cond("CADD_phred", FilterOperator::GREATER, "20");
-    EXPECT_FALSE(apply_condition(rec, cond));
+    EXPECT_TRUE(apply_condition(rec, cond));
 }
 
-TEST(ApplyCondition, DotFieldNumericComparisonReturnsFalse) {
+TEST(ApplyCondition, DotFieldNumericComparisonPassesThrough) {
+    // "." (missing) values pass through numeric comparisons (match Perl VEP)
     auto rec = make_record({{"AF", "."}});
     FilterCondition cond("AF", FilterOperator::LESS, "0.01");
-    EXPECT_FALSE(apply_condition(rec, cond));
+    EXPECT_TRUE(apply_condition(rec, cond));
 }
 
-TEST(ApplyCondition, NAFieldNumericComparisonReturnsFalse) {
+TEST(ApplyCondition, NAFieldNumericComparisonPassesThrough) {
+    // "NA" values pass through numeric comparisons (match Perl VEP)
     auto rec = make_record({{"AF", "NA"}});
     FilterCondition cond("AF", FilterOperator::GREATER_EQ, "0.01");
-    EXPECT_FALSE(apply_condition(rec, cond));
+    EXPECT_TRUE(apply_condition(rec, cond));
 }
 
 TEST(ApplyCondition, NumericEqualsWithFloatingPointPrecision) {

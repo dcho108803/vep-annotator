@@ -143,13 +143,17 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--biotype" && i + 1 < argc) {
             config.biotype_filter = parse_comma_list(argv[++i]);
         } else if (arg == "--min-af" && i + 1 < argc) {
-            config.min_af = std::stod(argv[++i]);
+            try { config.min_af = std::stod(argv[++i]); }
+            catch (...) { std::cerr << "Error: invalid numeric value for --min-af: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--max-af" && i + 1 < argc) {
-            config.max_af = std::stod(argv[++i]);
+            try { config.max_af = std::stod(argv[++i]); }
+            catch (...) { std::cerr << "Error: invalid numeric value for --max-af: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--min-cadd" && i + 1 < argc) {
-            config.min_cadd = std::stod(argv[++i]);
+            try { config.min_cadd = std::stod(argv[++i]); }
+            catch (...) { std::cerr << "Error: invalid numeric value for --min-cadd: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--min-revel" && i + 1 < argc) {
-            config.min_revel = std::stod(argv[++i]);
+            try { config.min_revel = std::stod(argv[++i]); }
+            catch (...) { std::cerr << "Error: invalid numeric value for --min-revel: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--coding-only") {
             config.coding_only = true;
         } else if (arg == "--exclude-intergenic") {
@@ -257,6 +261,12 @@ int main(int argc, char* argv[]) {
                               record.get("Position") + ":" +
                               record.get("Ref_allele") + ":" +
                               record.get("Alt_allele");
+            }
+            // Third fallback: use #Uploaded_variation or Uploaded_variation
+            if (variant_key == ":::") {
+                std::string uv = record.get("#Uploaded_variation");
+                if (uv.empty()) uv = record.get("Uploaded_variation");
+                if (!uv.empty()) variant_key = uv;
             }
 
             if (seen_variants.count(variant_key) > 0) {

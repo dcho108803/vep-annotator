@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <atomic>
+#include <mutex>
 #include <sys/stat.h>
 
 #ifdef HAVE_HTSLIB
@@ -122,8 +123,8 @@ struct TabixTSVReader::Impl {
     tbx_t* tbx = nullptr;
     std::vector<std::string> columns;
     std::map<std::string, int> column_index;
-    int chrom_col;
-    int pos_col;
+    int chrom_col = 0;
+    int pos_col = 1;
     bool valid = false;
 
     ~Impl() {
@@ -161,11 +162,14 @@ TabixTSVReader::TabixTSVReader(
     while (hts_getline(pimpl_->fp, KS_SEP_LINE, &str) >= 0) {
         if (str.l == 0) continue;
         if (str.s[0] == '#') {
-            // Parse header line
+            // Parse header line - strip all leading # characters
             std::string header(str.s);
-            if (header[0] == '#') header = header.substr(1);
+            size_t hash_end = 0;
+            while (hash_end < header.size() && header[hash_end] == '#') ++hash_end;
+            if (hash_end > 0) header = header.substr(hash_end);
 
             pimpl_->columns = split_line(header, '\t');
+            pimpl_->column_index.clear();
             for (size_t i = 0; i < pimpl_->columns.size(); ++i) {
                 pimpl_->column_index[pimpl_->columns[i]] = i;
             }
@@ -308,20 +312,16 @@ struct BigWigReader::Impl {
     }
 };
 
-// Reference count for global bwInit/bwCleanup lifecycle
+// Thread-safe init via call_once; ref count only for cleanup
+static std::once_flag bigwig_init_flag;
 static std::atomic<int> bigwig_init_count{0};
 
 BigWigReader::BigWigReader(const std::string& path)
     : pimpl_(std::make_unique<Impl>()), path_(path) {
 
-    // Initialize libBigWig (only on first reader)
-    if (bigwig_init_count.fetch_add(1) == 0) {
-        if (bwInit(1 << 17) != 0) {
-            bigwig_init_count.fetch_sub(1);
-            log(LogLevel::ERROR, "Failed to initialize libBigWig");
-            return;
-        }
-    }
+    // Initialize libBigWig exactly once across all threads
+    std::call_once(bigwig_init_flag, []() { bwInit(1 << 17); });
+    bigwig_init_count.fetch_add(1);
 
     // Open file
     pimpl_->bw = bwOpen(const_cast<char*>(path.c_str()), nullptr, "r");
@@ -567,6 +567,11 @@ GFF3Database::GFF3Database(
         read_line = [&gz, &buffer](std::string& line) -> bool {
             if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
+            // If buffer was filled without reaching newline, keep reading
+            while (!line.empty() && line.back() != '\n') {
+                if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) break;
+                line += buffer;
+            }
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
                 line.pop_back();
             }
@@ -884,11 +889,17 @@ bool AnnotationSourceManager::is_enabled(const std::string& name) const {
 }
 
 void AnnotationSourceManager::initialize_all() {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    for (auto& source : sources_) {
-        if (!source->is_ready() && disabled_.count(source->name()) == 0) {
-            source->initialize();
+    std::vector<std::shared_ptr<AnnotationSource>> to_init;
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        for (auto& source : sources_) {
+            if (!source->is_ready() && disabled_.count(source->name()) == 0) {
+                to_init.push_back(source);
+            }
         }
+    }
+    for (auto& source : to_init) {
+        source->initialize();
     }
 }
 
@@ -904,13 +915,6 @@ void AnnotationSourceManager::annotate_all(
 
     for (auto& source : sources_) {
         if (disabled_.count(source->name()) != 0) continue;
-
-        if (!source->is_ready()) {
-            // Initialize on first use
-            lock.unlock();
-            source->initialize();
-            lock.lock();
-        }
 
         try {
             source->annotate(chrom, pos, ref, alt, transcript, annotations);

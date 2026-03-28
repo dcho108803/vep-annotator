@@ -202,18 +202,26 @@ inline bool apply_condition(const FilterableRecord& record, const FilterConditio
     } else if (cond.op == FilterOperator::GREATER) {
         if (is_numeric) {
             result = (num_value > num_target);
+        } else {
+            result = true; // Pass through when value is non-numeric (match Perl VEP)
         }
     } else if (cond.op == FilterOperator::GREATER_EQ) {
         if (is_numeric) {
             result = (num_value >= num_target);
+        } else {
+            result = true; // Pass through when value is non-numeric (match Perl VEP)
         }
     } else if (cond.op == FilterOperator::LESS) {
         if (is_numeric) {
             result = (num_value < num_target);
+        } else {
+            result = true; // Pass through when value is non-numeric (match Perl VEP)
         }
     } else if (cond.op == FilterOperator::LESS_EQ) {
         if (is_numeric) {
             result = (num_value <= num_target);
+        } else {
+            result = true; // Pass through when value is non-numeric (match Perl VEP)
         }
     } else if (cond.op == FilterOperator::CONTAINS) {
         result = (value.find(cond.value) != std::string::npos);
@@ -599,7 +607,6 @@ inline int filter_tsv_file(const std::string& input_path,
     std::string line;
     std::map<std::string, int> col_map;
     int lines_passed = 0;
-    int lines_total = 0;
 
     while (std::getline(input, line)) {
         // Handle header
@@ -615,8 +622,6 @@ inline int filter_tsv_file(const std::string& input_path,
             output << line << "\n";
             continue;
         }
-
-        lines_total++;
 
         FilterableRecord record = parse_tsv_record(line, col_map);
 

@@ -14,6 +14,7 @@
 #include <cctype>
 #include <ctime>
 #include <iomanip>
+#include <atomic>
 #include <zlib.h>
 
 // Tabix support via htslib (optional - compile with -DHAVE_HTSLIB)
@@ -40,15 +41,6 @@ static char complement_base(char base) {
     }
 }
 
-static std::string complement_sequence(const std::string& seq) {
-    std::string result;
-    result.reserve(seq.size());
-    for (char c : seq) {
-        result += complement_base(c);
-    }
-    return result;
-}
-
 static std::string reverse_complement_sequence(const std::string& seq) {
     std::string result;
     result.reserve(seq.size());
@@ -62,7 +54,7 @@ static std::string reverse_complement_sequence(const std::string& seq) {
 // Logging
 // ============================================================================
 
-static LogLevel g_log_level = LogLevel::INFO;
+static std::atomic<LogLevel> g_log_level{LogLevel::INFO};
 
 void set_log_level(LogLevel level) {
     g_log_level = level;
@@ -281,7 +273,7 @@ char CodonTable::translate(const std::string& codon, const std::string& chromoso
     if (norm.length() > 3 && norm.substr(0, 3) == "chr") {
         norm = norm.substr(3);
     }
-    if (norm == "MT" || norm == "M" || norm == "chrM") {
+    if (norm == "MT" || norm == "M") {
         return translate_mt(codon);
     }
     return translate(codon);
@@ -1008,8 +1000,8 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
             if (line[0] == '>') {
                 // Save previous chromosome
                 if (!current_chrom.empty() && !current_seq.empty()) {
+                    pimpl_->lengths[current_chrom] = current_seq.length();
                     pimpl_->sequences[current_chrom] = std::move(current_seq);
-                    pimpl_->lengths[current_chrom] = pimpl_->sequences[current_chrom].length();
                 }
 
                 // Parse new chromosome name
@@ -1032,8 +1024,8 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
 
         // Save last chromosome
         if (!current_chrom.empty() && !current_seq.empty()) {
+            pimpl_->lengths[current_chrom] = current_seq.length();
             pimpl_->sequences[current_chrom] = std::move(current_seq);
-            pimpl_->lengths[current_chrom] = pimpl_->sequences[current_chrom].length();
         }
 
         gzclose(gz);
@@ -1057,8 +1049,8 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
 
             if (line[0] == '>') {
                 if (!current_chrom.empty() && !current_seq.empty()) {
+                    pimpl_->lengths[current_chrom] = current_seq.length();
                     pimpl_->sequences[current_chrom] = std::move(current_seq);
-                    pimpl_->lengths[current_chrom] = pimpl_->sequences[current_chrom].length();
                 }
 
                 size_t space_pos = line.find(' ');
@@ -1077,8 +1069,8 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
         }
 
         if (!current_chrom.empty() && !current_seq.empty()) {
+            pimpl_->lengths[current_chrom] = current_seq.length();
             pimpl_->sequences[current_chrom] = std::move(current_seq);
-            pimpl_->lengths[current_chrom] = pimpl_->sequences[current_chrom].length();
         }
     }
 
@@ -1966,6 +1958,9 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
 
     // Calculate cDNA position
     ann.cdna_position = calculate_cdna_position(pos, transcript);
+    if (ref.length() > 1) {
+        ann.cdna_end = calculate_cdna_position(pos + static_cast<int>(ref.length()) - 1, transcript);
+    }
 
     // Calculate CDS position and codon changes for coding variants
     if (transcript.is_coding()) {
@@ -2007,6 +2002,10 @@ void VEPAnnotator::annotate_coding_region(
 
     ann.cds_position = cds_pos;
     ann.protein_position = (cds_pos - 1) / 3 + 1;
+    if (ref.length() > 1) {
+        ann.cds_end = cds_pos + static_cast<int>(ref.length()) - 1;
+        ann.protein_end = (ann.cds_end - 1) / 3 + 1;
+    }
 
     // Get affected codons (using cached CDS)
     auto [ref_codon, alt_codon] = get_affected_codons(cds_pos, ref, alt, transcript, cached_cds);
@@ -3145,23 +3144,6 @@ std::string VEPAnnotator::generate_hgvsc(
             }
         } else {
             oss << cds_pos << "_" << (cds_pos + 1) << "ins" << inserted;
-        }
-    } else if (hgvs_ref.length() > 1 && hgvs_alt.length() > 1 &&
-               hgvs_ref.length() != hgvs_alt.length()) {
-        std::string delins_ref = hgvs_ref;
-        std::string delins_alt = hgvs_alt;
-        int delins_pos = cds_pos;
-        if (delins_ref.length() > 1 && delins_alt.length() > 1 &&
-            delins_ref[0] == delins_alt[0]) {
-            delins_ref = delins_ref.substr(1);
-            delins_alt = delins_alt.substr(1);
-            delins_pos += 1;
-        }
-        int del_end = delins_pos + static_cast<int>(delins_ref.length()) - 1;
-        if (delins_pos == del_end) {
-            oss << delins_pos << "delins" << delins_alt;
-        } else {
-            oss << delins_pos << "_" << del_end << "delins" << delins_alt;
         }
     } else {
         int end_pos = cds_pos + static_cast<int>(hgvs_ref.length()) - 1;

@@ -234,8 +234,8 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 |--------|-------------|
 | `--dbnsfp FILE` | dbNSFP database (tabix-indexed .txt.gz) |
 | `--dbnsfp-fields FIELDS` | Fields to extract (or preset: essential/pathogenicity/conservation/all) |
-| `--sift DISPLAY` | SIFT output style (p = prediction, s = score, b = both) |
-| `--polyphen DISPLAY` | PolyPhen output style (p/s/b) |
+| `--sift [DISPLAY]` | SIFT output style (p = prediction, s = score, b = both; default: p) |
+| `--polyphen [DISPLAY]` | PolyPhen output style (p/s/b; default: p) |
 
 ### Splice Predictions
 
@@ -279,6 +279,14 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 | `--custom FILE,NAME,TYPE,OVERLAP,0,FIELDS` | Perl VEP-compatible custom source (VCF, BED, bigWig) |
 
 See [Custom Annotation Files](#custom-annotation-files) for detailed usage, examples, and performance guidance.
+
+### Performance
+
+| Option | Description |
+|--------|-------------|
+| `--fork N` | Use N parallel annotation threads |
+| `--buffer_size N` | Number of variants to buffer (default: 5000) |
+| `--quiet` | Suppress progress messages |
 
 ### Filtering
 
@@ -418,14 +426,6 @@ int main() {
     return 0;
 }
 ```
-
-### Performance Options
-
-| Option | Description |
-|--------|-------------|
-| `--fork N` | Use N parallel annotation threads |
-| `--buffer_size N` | Number of variants to buffer (default: 5000) |
-| `--quiet` | Suppress progress messages |
 
 ## Build Options
 
@@ -699,6 +699,28 @@ Use `--check_existing` to look up co-located variants from a VCF database (uses 
 ```
 
 This populates the `Existing_variation` column with variant IDs (e.g., rs numbers) from the database.
+
+## Post-Processing: filter_vep
+
+A standalone `filter_vep` binary is built alongside `vep_annotator` for filtering annotation output:
+
+```bash
+# Filter for HIGH impact variants
+./filter_vep -i output.tsv -o filtered.tsv --impact HIGH
+
+# Rare missense variants in a gene list
+./filter_vep -i output.tsv -o filtered.tsv \
+    --consequence missense_variant --max-af 0.01 --gene-list genes.txt
+
+# Custom filter expressions
+./filter_vep -i output.tsv -o filtered.tsv \
+    -f 'IMPACT in HIGH,MODERATE' -f 'AF < 0.01' --canonical-only
+
+# Count matching records without writing output
+./filter_vep -i output.tsv --count -f 'CADD_phred > 20'
+```
+
+Supports: consequence/impact/gene/biotype filters, numeric thresholds (`--min-af`, `--max-af`, `--min-cadd`, `--min-revel`), boolean flags (`--coding-only`, `--canonical-only`, `--mane-only`, `--pick`), and arbitrary filter expressions with AND/OR logic. Run `./filter_vep --help` for full usage.
 
 ## Changelog
 

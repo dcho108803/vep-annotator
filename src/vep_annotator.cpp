@@ -142,8 +142,6 @@ Impact get_impact(ConsequenceType type) {
         case ConsequenceType::STOP_LOST:
         case ConsequenceType::START_LOST:
         case ConsequenceType::TRANSCRIPT_AMPLIFICATION:
-        case ConsequenceType::FEATURE_ELONGATION:
-        case ConsequenceType::FEATURE_TRUNCATION:
             return Impact::HIGH;
 
         case ConsequenceType::INFRAME_INSERTION:

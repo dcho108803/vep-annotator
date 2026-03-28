@@ -78,8 +78,8 @@ TEST(ImpactLevel, HighImpact) {
     EXPECT_EQ(get_impact(ConsequenceType::STOP_LOST), Impact::HIGH);
     EXPECT_EQ(get_impact(ConsequenceType::START_LOST), Impact::HIGH);
     EXPECT_EQ(get_impact(ConsequenceType::TRANSCRIPT_AMPLIFICATION), Impact::HIGH);
-    EXPECT_EQ(get_impact(ConsequenceType::FEATURE_ELONGATION), Impact::HIGH);
-    EXPECT_EQ(get_impact(ConsequenceType::FEATURE_TRUNCATION), Impact::HIGH);
+    EXPECT_EQ(get_impact(ConsequenceType::FEATURE_ELONGATION), Impact::MODIFIER);
+    EXPECT_EQ(get_impact(ConsequenceType::FEATURE_TRUNCATION), Impact::MODIFIER);
 }
 
 TEST(ImpactLevel, ModerateImpact) {

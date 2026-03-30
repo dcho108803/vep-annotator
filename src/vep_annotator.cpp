@@ -2000,11 +2000,11 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
         if (cds_pos > 0) {
             annotate_coding_region(chrom, pos, ref, alt, transcript, cached_cds, cds_pos, ann);
         } else {
-            annotate_noncds_hgvsc(pos, ref, alt, transcript, ann);
+            annotate_noncds_hgvsc(chrom, pos, ref, alt, transcript, ann);
         }
     } else {
         // Non-coding transcript: generate n. HGVSc notation
-        annotate_noncoding_hgvsc(pos, ref, alt, transcript, ann);
+        annotate_noncoding_hgvsc(chrom, pos, ref, alt, transcript, ann);
     }
 
     // Populate metadata and return
@@ -2038,9 +2038,26 @@ void VEPAnnotator::annotate_coding_region(
 
     ann.codons = ref_codon + "/" + alt_codon;
 
-    char ref_aa = translate_with_sec(ref_codon, transcript.chromosome, transcript.gene_name);
-    char alt_aa = translate_with_sec(alt_codon, transcript.chromosome, transcript.gene_name);
-    ann.amino_acids = std::string(1, ref_aa) + "/" + std::string(1, alt_aa);
+    // Translate codons to amino acids (handle multi-codon MNVs)
+    std::string ref_aa_str, alt_aa_str;
+    if (ref_codon.length() <= 3 && alt_codon.length() <= 3) {
+        // Single codon (SNV or single-codon MNV)
+        char ref_aa = translate_with_sec(ref_codon, transcript.chromosome, transcript.gene_name);
+        char alt_aa = translate_with_sec(alt_codon, transcript.chromosome, transcript.gene_name);
+        ref_aa_str = std::string(1, ref_aa);
+        alt_aa_str = std::string(1, alt_aa);
+    } else {
+        // Multi-codon MNV: translate each codon in the range
+        for (size_t i = 0; i + 2 < ref_codon.length(); i += 3) {
+            std::string rc = ref_codon.substr(i, 3);
+            ref_aa_str += translate_with_sec(rc, transcript.chromosome, transcript.gene_name);
+        }
+        for (size_t i = 0; i + 2 < alt_codon.length(); i += 3) {
+            std::string ac = alt_codon.substr(i, 3);
+            alt_aa_str += translate_with_sec(ac, transcript.chromosome, transcript.gene_name);
+        }
+    }
+    ann.amino_acids = ref_aa_str + "/" + alt_aa_str;
 
     // Apply 3' shifting in CDS space for HGVS generation (indels only)
     int hgvs_cds_pos = cds_pos;
@@ -2144,8 +2161,8 @@ void VEPAnnotator::annotate_coding_region(
     }
 
     ann.hgvsp = generate_hgvsp(
-        CodonTable::get_three_letter(ref_aa),
-        CodonTable::get_three_letter(alt_aa),
+        CodonTable::get_three_letter(ref_aa_str[0]),
+        CodonTable::get_three_letter(alt_aa_str[0]),
         ann.protein_position,
         transcript,
         ann.consequences,
@@ -2159,7 +2176,7 @@ void VEPAnnotator::annotate_coding_region(
 // annotate_noncds_hgvsc: intronic and UTR HGVSc notation
 // ---------------------------------------------------------------------------
 void VEPAnnotator::annotate_noncds_hgvsc(
-    int pos,
+    const std::string& chrom, int pos,
     const std::string& ref, const std::string& alt,
     const Transcript& transcript,
     VariantAnnotation& ann) {
@@ -2169,6 +2186,77 @@ void VEPAnnotator::annotate_noncds_hgvsc(
     int hgvs_pos = pos;
     if (ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
         hgvs_pos = pos + 1;
+    }
+
+    // 3' shift for non-CDS indels (intronic, UTR exonic) to match Perl VEP behavior
+    if (reference_ && ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
+        std::string shorter = (ref.length() < alt.length()) ? ref : alt;
+        std::string longer = (ref.length() >= alt.length()) ? ref : alt;
+        std::string indel_seq = longer.substr(shorter.length());
+        bool is_insertion = (alt.length() > ref.length());
+
+        // Determine the boundary for shifting (intron end or exon end)
+        int shift_limit = 0;
+        bool is_intronic_var = std::find(ann.consequences.begin(), ann.consequences.end(),
+                                          ConsequenceType::INTRON_VARIANT) != ann.consequences.end();
+        if (is_intronic_var) {
+            // Find the intron this variant is in; limit shift to intron end
+            for (size_t i = 0; i + 1 < transcript.exons.size(); ++i) {
+                int intron_start = transcript.exons[i].end + 1;
+                int intron_end = transcript.exons[i + 1].start - 1;
+                if (hgvs_pos >= intron_start && hgvs_pos <= intron_end) {
+                    if (transcript.strand == '+') {
+                        shift_limit = intron_end;
+                    } else {
+                        shift_limit = intron_start;
+                    }
+                    break;
+                }
+            }
+        } else {
+            // UTR exonic: find the exon, limit shift to exon end
+            for (const auto& exon : transcript.exons) {
+                if (hgvs_pos >= exon.start && hgvs_pos <= exon.end) {
+                    if (transcript.strand == '+') {
+                        shift_limit = exon.end;
+                    } else {
+                        shift_limit = exon.start;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (shift_limit > 0) {
+            int indel_len = static_cast<int>(indel_seq.size());
+            for (int i = 0; i < 100; ++i) {
+                int check_pos;
+                if (transcript.strand == '+') {
+                    check_pos = hgvs_pos + (is_insertion ? 0 : indel_len);
+                    if (check_pos > shift_limit) break;
+                } else {
+                    check_pos = hgvs_pos - 1;
+                    if (check_pos < shift_limit) break;
+                }
+                char next_base = reference_->get_base(chrom, check_pos);
+                char indel_first = indel_seq[0];
+                if (transcript.strand == '-') {
+                    indel_first = indel_seq.back();
+                }
+                if (std::toupper(static_cast<unsigned char>(next_base)) ==
+                    std::toupper(static_cast<unsigned char>(indel_first))) {
+                    if (transcript.strand == '+') {
+                        std::rotate(indel_seq.begin(), indel_seq.begin() + 1, indel_seq.end());
+                        hgvs_pos++;
+                    } else {
+                        std::rotate(indel_seq.rbegin(), indel_seq.rbegin() + 1, indel_seq.rend());
+                        hgvs_pos--;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     // Check if variant is intronic (consequences already determined before this call)
@@ -2376,7 +2464,7 @@ void VEPAnnotator::annotate_noncds_hgvsc(
 // annotate_noncoding_hgvsc: n. HGVSc notation for non-coding transcripts
 // ---------------------------------------------------------------------------
 void VEPAnnotator::annotate_noncoding_hgvsc(
-    int pos,
+    const std::string& chrom, int pos,
     const std::string& ref, const std::string& alt,
     const Transcript& transcript,
     VariantAnnotation& ann) {
@@ -2386,6 +2474,74 @@ void VEPAnnotator::annotate_noncoding_hgvsc(
     int hgvs_pos = pos;
     if (ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
         hgvs_pos = pos + 1;
+    }
+
+    // 3' shift for non-coding indels (intronic and exonic) to match Perl VEP behavior
+    if (reference_ && ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
+        std::string shorter = (ref.length() < alt.length()) ? ref : alt;
+        std::string longer = (ref.length() >= alt.length()) ? ref : alt;
+        std::string indel_seq = longer.substr(shorter.length());
+        bool is_insertion = (alt.length() > ref.length());
+
+        bool is_intronic_var = std::find(ann.consequences.begin(), ann.consequences.end(),
+                                          ConsequenceType::INTRON_VARIANT) != ann.consequences.end();
+        int shift_limit = 0;
+        if (is_intronic_var) {
+            for (size_t i = 0; i + 1 < transcript.exons.size(); ++i) {
+                int intron_start = transcript.exons[i].end + 1;
+                int intron_end = transcript.exons[i + 1].start - 1;
+                if (hgvs_pos >= intron_start && hgvs_pos <= intron_end) {
+                    if (transcript.strand == '+') {
+                        shift_limit = intron_end;
+                    } else {
+                        shift_limit = intron_start;
+                    }
+                    break;
+                }
+            }
+        } else {
+            for (const auto& exon : transcript.exons) {
+                if (hgvs_pos >= exon.start && hgvs_pos <= exon.end) {
+                    if (transcript.strand == '+') {
+                        shift_limit = exon.end;
+                    } else {
+                        shift_limit = exon.start;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (shift_limit > 0) {
+            int indel_len = static_cast<int>(indel_seq.size());
+            for (int i = 0; i < 100; ++i) {
+                int check_pos;
+                if (transcript.strand == '+') {
+                    check_pos = hgvs_pos + (is_insertion ? 0 : indel_len);
+                    if (check_pos > shift_limit) break;
+                } else {
+                    check_pos = hgvs_pos - 1;
+                    if (check_pos < shift_limit) break;
+                }
+                char next_base = reference_->get_base(chrom, check_pos);
+                char indel_first = indel_seq[0];
+                if (transcript.strand == '-') {
+                    indel_first = indel_seq.back();
+                }
+                if (std::toupper(static_cast<unsigned char>(next_base)) ==
+                    std::toupper(static_cast<unsigned char>(indel_first))) {
+                    if (transcript.strand == '+') {
+                        std::rotate(indel_seq.begin(), indel_seq.begin() + 1, indel_seq.end());
+                        hgvs_pos++;
+                    } else {
+                        std::rotate(indel_seq.rbegin(), indel_seq.rbegin() + 1, indel_seq.rend());
+                        hgvs_pos--;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     // Check if variant is intronic (consequences already determined before this call)
@@ -2406,7 +2562,8 @@ void VEPAnnotator::annotate_noncoding_hgvsc(
     }
 
     // Exonic: use cDNA position with n. prefix
-    int cdna_pos = ann.cdna_position;
+    // Recalculate cDNA position from the (potentially shifted) genomic position
+    int cdna_pos = calculate_cdna_position(hgvs_pos, transcript);
     if (cdna_pos > 0) {
         std::string pos_str = std::to_string(cdna_pos);
         ann.hgvsc = build_hgvsc(pos_str, ref, alt, transcript, transcript_version_, "n",
@@ -3047,26 +3204,32 @@ std::pair<std::string, std::string> VEPAnnotator::get_affected_codons(
     if (cds_pos <= 0) return {"", ""};
 
     // Calculate codon position (0-based codon number)
-    int codon_num = (cds_pos - 1) / 3;
+    int first_codon = (cds_pos - 1) / 3;
     int pos_in_codon = (cds_pos - 1) % 3;
 
     if (cds_seq.empty()) return {"", ""};
 
-    // Get the reference codon
-    int codon_start = codon_num * 3;
-    if (codon_start + 3 > static_cast<int>(cds_seq.length())) {
-        return {"", ""};
-    }
-
-    std::string ref_codon = cds_seq.substr(codon_start, 3);
-
-    // Create the alternate codon
-    std::string alt_codon = ref_codon;
     if (ref.length() == alt.length()) {
         // Handle SNVs and MNVs (same-length substitutions)
+        int last_codon = (cds_pos + static_cast<int>(ref.length()) - 2) / 3;
+
+        // Extract the full range of affected codons
+        int codon_start = first_codon * 3;
+        int codon_end_exclusive = (last_codon + 1) * 3;
+        if (codon_end_exclusive > static_cast<int>(cds_seq.length())) {
+            codon_end_exclusive = static_cast<int>(cds_seq.length());
+        }
+        if (codon_start >= static_cast<int>(cds_seq.length())) {
+            return {"", ""};
+        }
+
+        std::string ref_codon = cds_seq.substr(codon_start, codon_end_exclusive - codon_start);
+        std::string alt_codon = ref_codon;
+
+        // Apply substitutions across all affected codons
         for (size_t i = 0; i < alt.length(); ++i) {
             int codon_offset = pos_in_codon + static_cast<int>(i);
-            if (codon_offset >= 0 && codon_offset < 3) {
+            if (codon_offset >= 0 && codon_offset < static_cast<int>(alt_codon.length())) {
                 // For minus strand, reverse the index: genomic order is reversed in CDS
                 size_t alt_idx = (transcript.strand == '-') ? (alt.length() - 1 - i) : i;
                 char alt_base = alt[alt_idx];
@@ -3076,8 +3239,18 @@ std::pair<std::string, std::string> VEPAnnotator::get_affected_codons(
                 alt_codon[codon_offset] = alt_base;
             }
         }
+
+        return {ref_codon, alt_codon};
     } else {
         // Handle indels (insertions and deletions)
+        int codon_start = first_codon * 3;
+        if (codon_start + 3 > static_cast<int>(cds_seq.length())) {
+            return {"", ""};
+        }
+
+        std::string ref_codon = cds_seq.substr(codon_start, 3);
+        std::string alt_codon = ref_codon;
+
         // Build mutated CDS by applying the indel, then extract the alt codon
         std::string mut_cds;
         int ref_len = static_cast<int>(ref.length());
@@ -3105,9 +3278,9 @@ std::pair<std::string, std::string> VEPAnnotator::get_affected_codons(
             alt_codon = mut_cds.substr(codon_start, 3);
         }
         // If mutated CDS is too short (e.g., large deletion), alt_codon stays as ref_codon
-    }
 
-    return {ref_codon, alt_codon};
+        return {ref_codon, alt_codon};
+    }
 }
 
 std::string VEPAnnotator::generate_hgvsc(
@@ -3134,35 +3307,59 @@ std::string VEPAnnotator::generate_hgvsc(
     }
     oss << tid << ":c.";
 
-    // For minus-strand transcripts, complement the alleles to transcript orientation
-    std::string hgvs_ref = ref;
-    std::string hgvs_alt = alt;
-    if (transcript.strand == '-') {
-        hgvs_ref = reverse_complement_sequence(ref);
-        hgvs_alt = reverse_complement_sequence(alt);
+    // For indels with VCF anchor base (ref[0]==alt[0], different lengths),
+    // strip the anchor base before complementing, and adjust cds_pos.
+    std::string work_ref = ref;
+    std::string work_alt = alt;
+    if (ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
+        work_ref = ref.substr(1);
+        work_alt = alt.substr(1);
+        cds_pos += 1;  // Advance past anchor base position
     }
 
-    if (hgvs_ref.length() == 1 && hgvs_alt.length() == 1) {
-        // SNV
+    // For minus-strand transcripts, complement the alleles to transcript orientation
+    std::string hgvs_ref = work_ref;
+    std::string hgvs_alt = work_alt;
+    if (transcript.strand == '-') {
+        hgvs_ref = reverse_complement_sequence(work_ref);
+        hgvs_alt = reverse_complement_sequence(work_alt);
+    }
+
+    if (!hgvs_ref.empty() && !hgvs_alt.empty() &&
+        hgvs_ref.length() == 1 && hgvs_alt.length() == 1) {
+        // SNV (or single-base substitution after anchor stripping)
         oss << cds_pos << hgvs_ref << ">" << hgvs_alt;
-    } else if (hgvs_ref.length() > hgvs_alt.length()) {
-        // Deletion
-        int del_len = static_cast<int>(hgvs_ref.length() - hgvs_alt.length());
-        if (del_len == 1) {
-            oss << (cds_pos + static_cast<int>(hgvs_alt.length())) << "del";
+    } else if (hgvs_ref.length() > hgvs_alt.length() || (!hgvs_ref.empty() && hgvs_alt.empty())) {
+        // Deletion: after anchor stripping, hgvs_ref has deleted bases, hgvs_alt may be empty
+        int del_start = cds_pos;
+        int del_len;
+        if (hgvs_alt.empty()) {
+            del_len = static_cast<int>(hgvs_ref.length());
         } else {
-            oss << (cds_pos + static_cast<int>(hgvs_alt.length())) << "_"
-                << (cds_pos + static_cast<int>(hgvs_ref.length()) - 1) << "del";
+            del_start = cds_pos + static_cast<int>(hgvs_alt.length());
+            del_len = static_cast<int>(hgvs_ref.length() - hgvs_alt.length());
         }
-    } else if (hgvs_alt.length() > hgvs_ref.length()) {
+        if (del_len == 1) {
+            oss << del_start << "del";
+        } else {
+            oss << del_start << "_" << (del_start + del_len - 1) << "del";
+        }
+    } else if (hgvs_alt.length() > hgvs_ref.length() || (hgvs_ref.empty() && !hgvs_alt.empty())) {
         // Insertion - check for duplication
-        std::string inserted = hgvs_alt.substr(hgvs_ref.length());
+        // After anchor stripping: hgvs_ref may be empty (pure insertion)
+        std::string inserted;
+        if (hgvs_ref.empty()) {
+            inserted = hgvs_alt;
+        } else {
+            inserted = hgvs_alt.substr(hgvs_ref.length());
+        }
         int ins_len = static_cast<int>(inserted.length());
 
         bool is_dup = false;
 
-        // Check if inserted bases match the preceding reference context (0-based)
-        int cds_idx = cds_pos - 1; // Convert to 0-based
+        // For pure insertion (anchor stripped): insertion is between cds_pos-1 and cds_pos
+        int ins_pos = hgvs_ref.empty() ? (cds_pos - 1) : cds_pos;
+        int cds_idx = ins_pos;  // 1-based position for dup check
         if (cds_idx >= ins_len && cds_idx <= static_cast<int>(cds_seq.length())) {
             std::string preceding = cds_seq.substr(cds_idx - ins_len, ins_len);
             std::string ins_upper = inserted;
@@ -3175,16 +3372,19 @@ std::string VEPAnnotator::generate_hgvsc(
         }
 
         if (is_dup) {
-            int dup_start = cds_pos - ins_len + 1;
-            int dup_end = cds_pos;
+            int dup_end = ins_pos;
+            int dup_start = dup_end - ins_len + 1;
             if (ins_len == 1) {
                 oss << dup_end << "dup";
             } else {
                 oss << dup_start << "_" << dup_end << "dup";
             }
         } else {
-            oss << cds_pos << "_" << (cds_pos + 1) << "ins" << inserted;
+            oss << ins_pos << "_" << (ins_pos + 1) << "ins" << inserted;
         }
+    } else if (hgvs_ref.empty() && hgvs_alt.empty()) {
+        // Edge case: anchor-only (ref==alt single base) - no actual change
+        return "";
     } else {
         int end_pos = cds_pos + static_cast<int>(hgvs_ref.length()) - 1;
         if (cds_pos == end_pos) {
@@ -3326,11 +3526,20 @@ static std::string build_hgvsc(
     }
     oss << tid << ":" << prefix << ".";
 
-    std::string hgvs_ref = ref;
-    std::string hgvs_alt = alt;
+    // For indels with VCF anchor base (ref[0]==alt[0], different lengths),
+    // strip the anchor base before complementing so only variant bases are RC'd.
+    std::string work_ref = ref;
+    std::string work_alt = alt;
+    if (ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
+        work_ref = ref.substr(1);
+        work_alt = alt.substr(1);
+    }
+
+    std::string hgvs_ref = work_ref;
+    std::string hgvs_alt = work_alt;
     if (transcript.strand == '-') {
-        hgvs_ref = reverse_complement_sequence(ref);
-        hgvs_alt = reverse_complement_sequence(alt);
+        hgvs_ref = reverse_complement_sequence(work_ref);
+        hgvs_alt = reverse_complement_sequence(work_alt);
     }
 
     append_hgvs_change(oss, pos_str, hgvs_ref, hgvs_alt, offset_fn);
@@ -3509,6 +3718,11 @@ std::string VEPAnnotator::generate_hgvsp(
 
 const Transcript* VEPAnnotator::get_transcript(const std::string& transcript_id) const {
     return transcript_db_->get_transcript(transcript_id);
+}
+
+std::vector<const Transcript*> VEPAnnotator::get_transcripts_in_region(
+    const std::string& chrom, int start, int end) const {
+    return transcript_db_->get_transcripts_in_region(chrom, start, end);
 }
 
 int VEPAnnotator::map_cds_to_genomic(int cds_pos, const Transcript& transcript) const {

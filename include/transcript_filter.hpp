@@ -407,18 +407,12 @@ private:
         }
 
         if (!config_.exclude_consequences.empty()) {
-            // Only exclude if the most severe consequence is in the exclude set
-            int best_rank = 999;
-            std::string most_severe;
+            // Exclude if ANY consequence in the annotation matches the exclude set
             for (const auto& csq : ann.consequences) {
-                int r = get_consequence_rank(csq);
-                if (r < best_rank) {
-                    best_rank = r;
-                    most_severe = consequence_to_string(csq);
+                if (consequence_set_contains(config_.exclude_consequences,
+                                             consequence_to_string(csq))) {
+                    return false;
                 }
-            }
-            if (consequence_set_contains(config_.exclude_consequences, most_severe)) {
-                return false;
             }
         }
 
@@ -587,24 +581,50 @@ private:
 
         if (annotations.empty()) return annotations;
 
+        // Find the most severe consequence across ALL annotations
         int min_rank = 100;
+        ConsequenceType most_severe_csq = ConsequenceType::UNKNOWN;
         for (const auto& ann : annotations) {
-            int rank = ann.get_rank();
-            if (rank < min_rank) min_rank = rank;
-        }
-
-        std::vector<AnnotationWithMeta> result;
-        for (auto& ann : annotations) {
-            if (ann.get_rank() == min_rank) {
-                result.push_back(std::move(ann));
+            for (const auto& csq : ann.annotation.consequences) {
+                int rank = get_consequence_rank(csq);
+                if (rank < min_rank) {
+                    min_rank = rank;
+                    most_severe_csq = csq;
+                }
             }
         }
 
-        // If still multiple, pick the best one
-        if (result.size() > 1) {
-            return pick_one(std::move(result));
-        }
+        // Perl VEP --most_severe outputs ONE summary line per variant with only
+        // the most severe consequence term -- no gene/transcript/position details.
+        AnnotationWithMeta summary;
+        // Preserve variant-level info from the first annotation
+        summary.annotation.chromosome = annotations[0].annotation.chromosome;
+        summary.annotation.position = annotations[0].annotation.position;
+        summary.annotation.ref_allele = annotations[0].annotation.ref_allele;
+        summary.annotation.alt_allele = annotations[0].annotation.alt_allele;
+        summary.annotation.input_variant = annotations[0].annotation.input_variant;
+        summary.annotation.display_ref = annotations[0].annotation.display_ref;
+        summary.annotation.display_alt = annotations[0].annotation.display_alt;
+        summary.annotation.display_start = annotations[0].annotation.display_start;
+        summary.annotation.display_end = annotations[0].annotation.display_end;
+        summary.annotation.existing_variation = annotations[0].annotation.existing_variation;
+        summary.annotation.hgvsg = annotations[0].annotation.hgvsg;
+        // Preserve VCF passthrough fields
+        summary.annotation.vcf_id = annotations[0].annotation.vcf_id;
+        summary.annotation.vcf_qual = annotations[0].annotation.vcf_qual;
+        summary.annotation.vcf_filter = annotations[0].annotation.vcf_filter;
+        summary.annotation.vcf_info = annotations[0].annotation.vcf_info;
+        summary.annotation.vcf_sample_columns = annotations[0].annotation.vcf_sample_columns;
+        summary.annotation.vcf_ref = annotations[0].annotation.vcf_ref;
+        summary.annotation.vcf_alt = annotations[0].annotation.vcf_alt;
+        // Set only the most severe consequence
+        summary.annotation.consequences = { most_severe_csq };
+        summary.annotation.impact = get_impact(most_severe_csq);
+        // No transcript/gene details
+        summary.annotation.feature_type = "-";
 
+        std::vector<AnnotationWithMeta> result;
+        result.push_back(std::move(summary));
         return result;
     }
 

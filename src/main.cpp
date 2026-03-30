@@ -2572,25 +2572,11 @@ int main(int argc, char* argv[]) {
                         // Route to structural variant pipeline
                         auto sv = vep::parse_sv_from_vcf(chrom, pos, ref, single_alt, info_map);
 
-                        // Get overlapping transcripts for the SV region
-                        auto sv_annotations = annotator.annotate(chrom, pos, ref, ref);
-                        // We use annotate() to get transcript list; but we override consequences with SV-specific ones
-                        // Instead, get transcripts in the SV region and compute SV consequences directly
+                        // Get ALL overlapping transcripts for the full SV region
                         annotations.clear();
+                        auto sv_transcripts = annotator.get_transcripts_in_region(chrom, sv.start, sv.end);
 
-                        // Use the annotator to get transcripts in region via a dummy annotate call
-                        // The SV spans from sv.start to sv.end
-                        auto region_anns = annotator.annotate(chrom, sv.start, ref, ref);
-                        // Collect unique transcript IDs we already saw
-                        std::set<std::string> seen_transcripts;
-                        for (const auto& ra : region_anns) {
-                            if (!ra.transcript_id.empty()) {
-                                seen_transcripts.insert(ra.transcript_id);
-                            }
-                        }
-
-                        // For each transcript found, compute SV consequences
-                        if (region_anns.empty() || (region_anns.size() == 1 && region_anns[0].transcript_id.empty())) {
+                        if (sv_transcripts.empty()) {
                             // Intergenic SV
                             vep::VariantAnnotation ann;
                             ann.input_variant = line;
@@ -2602,9 +2588,7 @@ int main(int argc, char* argv[]) {
                             ann.impact = vep::Impact::MODIFIER;
                             annotations.push_back(std::move(ann));
                         } else {
-                            for (const auto& ra : region_anns) {
-                                if (ra.transcript_id.empty()) continue;
-                                const vep::Transcript* tx = annotator.get_transcript(ra.transcript_id);
+                            for (const auto* tx : sv_transcripts) {
                                 if (!tx) continue;
 
                                 auto sv_csqs = vep::get_sv_consequences(sv, *tx);
@@ -2615,11 +2599,11 @@ int main(int argc, char* argv[]) {
                                 ann.position = pos;
                                 ann.ref_allele = ref;
                                 ann.alt_allele = single_alt;
-                                ann.gene_symbol = ra.gene_symbol;
-                                ann.gene_id = ra.gene_id;
-                                ann.transcript_id = ra.transcript_id;
-                                ann.biotype = ra.biotype;
-                                ann.is_canonical = ra.is_canonical;
+                                ann.gene_symbol = tx->gene_name;
+                                ann.gene_id = tx->gene_id;
+                                ann.transcript_id = tx->id;
+                                ann.biotype = tx->biotype;
+                                ann.is_canonical = tx->is_canonical;
                                 ann.consequences = sv_csqs;
                                 // Set impact from most severe SV consequence
                                 ann.impact = vep::Impact::MODIFIER;
@@ -3139,8 +3123,9 @@ int main(int argc, char* argv[]) {
                 std::map<std::string, std::string> info_map;
                 auto sv = vep::parse_sv_from_vcf(chrom, pos, ref, alt, info_map);
 
-                auto region_anns = annotator.annotate(chrom, sv.start, ref, ref);
-                if (region_anns.empty() || (region_anns.size() == 1 && region_anns[0].transcript_id.empty())) {
+                // Get ALL overlapping transcripts for the full SV region
+                auto sv_transcripts = annotator.get_transcripts_in_region(chrom, sv.start, sv.end);
+                if (sv_transcripts.empty()) {
                     vep::VariantAnnotation ann;
                     ann.chromosome = chrom;
                     ann.position = pos;
@@ -3150,9 +3135,7 @@ int main(int argc, char* argv[]) {
                     ann.impact = vep::Impact::MODIFIER;
                     annotations.push_back(std::move(ann));
                 } else {
-                    for (const auto& ra : region_anns) {
-                        if (ra.transcript_id.empty()) continue;
-                        const vep::Transcript* tx = annotator.get_transcript(ra.transcript_id);
+                    for (const auto* tx : sv_transcripts) {
                         if (!tx) continue;
 
                         auto sv_csqs = vep::get_sv_consequences(sv, *tx);
@@ -3162,11 +3145,11 @@ int main(int argc, char* argv[]) {
                         ann.position = pos;
                         ann.ref_allele = ref;
                         ann.alt_allele = alt;
-                        ann.gene_symbol = ra.gene_symbol;
-                        ann.gene_id = ra.gene_id;
-                        ann.transcript_id = ra.transcript_id;
-                        ann.biotype = ra.biotype;
-                        ann.is_canonical = ra.is_canonical;
+                        ann.gene_symbol = tx->gene_name;
+                        ann.gene_id = tx->gene_id;
+                        ann.transcript_id = tx->id;
+                        ann.biotype = tx->biotype;
+                        ann.is_canonical = tx->is_canonical;
                         ann.consequences = sv_csqs;
                         ann.impact = vep::Impact::MODIFIER;
                         for (const auto& c : sv_csqs) {

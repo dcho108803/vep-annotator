@@ -77,9 +77,18 @@ public:
             if (!cell_types_.empty()) {
                 auto ct_it = feature->attributes.find("cell_type");
                 if (ct_it != feature->attributes.end()) {
+                    // Split the cell_type value by comma and check for exact token matches
                     bool match = false;
-                    for (const auto& ct : cell_types_) {
-                        if (ct_it->second.find(ct) != std::string::npos) {
+                    std::istringstream ct_stream(ct_it->second);
+                    std::string token;
+                    while (std::getline(ct_stream, token, ',')) {
+                        // Trim whitespace from token
+                        size_t tstart = token.find_first_not_of(" \t");
+                        size_t tend = token.find_last_not_of(" \t");
+                        if (tstart != std::string::npos && tend != std::string::npos) {
+                            token = token.substr(tstart, tend - tstart + 1);
+                        }
+                        if (cell_types_.count(token)) {
                             match = true;
                             break;
                         }

@@ -1385,10 +1385,11 @@ TEST_F(VCFWriterTest, CSQFormatInHeader) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    // Default CSQ format should contain standard fields
+    // Default CSQ format should contain standard fields including SYMBOL_SOURCE and HGNC_ID
     EXPECT_NE(content.find("Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature|BIOTYPE|"
                            "EXON|INTRON|HGVSc|HGVSp|cDNA_position|CDS_position|Protein_position|"
-                           "Amino_acids|Codons|Existing_variation|DISTANCE|STRAND|FLAGS"),
+                           "Amino_acids|Codons|Existing_variation|DISTANCE|STRAND|FLAGS|"
+                           "SYMBOL_SOURCE|HGNC_ID"),
               std::string::npos);
 }
 

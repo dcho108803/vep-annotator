@@ -1154,7 +1154,7 @@ public:
         }
 
         // Add CSQ INFO header
-        header << "##INFO=<ID=" << info_field_name_ << ",Number=.,Type=String,Description=\"Consequence annotations from VEP. "
+        header << "##INFO=<ID=" << info_field_name_ << ",Number=.,Type=String,Description=\"Consequence annotations from Ensembl VEP. "
                << "Format: ";
 
         if (!field_order_.empty()) {
@@ -1165,7 +1165,8 @@ public:
         } else {
             header << "Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature|BIOTYPE|"
                    << "EXON|INTRON|HGVSc|HGVSp|cDNA_position|CDS_position|Protein_position|"
-                   << "Amino_acids|Codons|Existing_variation|DISTANCE|STRAND|FLAGS";
+                   << "Amino_acids|Codons|Existing_variation|DISTANCE|STRAND|FLAGS|"
+                   << "SYMBOL_SOURCE|HGNC_ID";
             for (const auto& col : custom_columns_) {
                 header << "|" << col;
             }
@@ -1382,6 +1383,15 @@ private:
         {
             auto flags_it = ann.custom_annotations.find("FLAGS");
             csq << (flags_it != ann.custom_annotations.end() ? escape_vcf(flags_it->second) : "");
+        }
+        // SYMBOL_SOURCE and HGNC_ID
+        {
+            csq << "|";
+            auto ss_it = ann.custom_annotations.find("SYMBOL_SOURCE");
+            csq << (ss_it != ann.custom_annotations.end() ? escape_vcf(ss_it->second) : "");
+            csq << "|";
+            auto hgnc_it = ann.custom_annotations.find("HGNC_ID");
+            csq << (hgnc_it != ann.custom_annotations.end() ? escape_vcf(hgnc_it->second) : "");
         }
 
         for (const auto& col : custom_columns_) {

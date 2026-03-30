@@ -781,7 +781,7 @@ private:
      * Annotate non-CDS HGVSc: intronic (c.N+/-offset) and UTR (c.-N, c.*N) notation
      */
     void annotate_noncds_hgvsc(
-        int pos,
+        const std::string& chrom, int pos,
         const std::string& ref, const std::string& alt,
         const Transcript& transcript,
         VariantAnnotation& ann);
@@ -790,7 +790,7 @@ private:
      * Annotate non-coding transcript HGVSc: n. notation for exonic and intronic positions
      */
     void annotate_noncoding_hgvsc(
-        int pos,
+        const std::string& chrom, int pos,
         const std::string& ref, const std::string& alt,
         const Transcript& transcript,
         VariantAnnotation& ann);

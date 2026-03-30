@@ -476,21 +476,21 @@ TEST(TranscriptFilterBasic, ExcludeConsequences_FiltersMostSevere) {
     EXPECT_TRUE(filter.passes_filter(missense));
 }
 
-TEST(TranscriptFilterBasic, ExcludeConsequences_OnlyExcludesMostSevere) {
-    // If an annotation has multiple consequences, only the most severe
-    // is checked against the exclude set
+TEST(TranscriptFilterBasic, ExcludeConsequences_ChecksAllConsequences) {
+    // If an annotation has multiple consequences, ALL are checked against the
+    // exclude set -- if ANY matches, the annotation is excluded
     TranscriptFilterConfig config;
     config.exclude_consequences.insert("intron_variant");
     TranscriptFilter filter(config);
 
     // Has splice_region_variant (more severe) and intron_variant
-    // Most severe is splice_region_variant, which is NOT in exclude set
+    // intron_variant IS in the exclude set, so this annotation is excluded
     VariantAnnotation ann = make_annotation(
         "ENST00000269305", "TP53", "ENSG00000141510", "protein_coding",
         true, {ConsequenceType::INTRON_VARIANT, ConsequenceType::SPLICE_REGION_VARIANT},
         Impact::LOW);
 
-    EXPECT_TRUE(filter.passes_filter(ann));
+    EXPECT_FALSE(filter.passes_filter(ann));
 }
 
 // --- impact filter ---

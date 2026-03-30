@@ -380,8 +380,8 @@ TEST(CreateOutputWriter, CreatesJSONWriter) {
     writer->write_footer();
     writer->close();
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("["), std::string::npos);
-    EXPECT_NE(content.find("]"), std::string::npos);
+    // NDJSON format: no wrapping array brackets
+    EXPECT_TRUE(content.empty());
 }
 
 TEST(CreateOutputWriter, CreatesVCFWriter) {
@@ -790,7 +790,7 @@ TEST_F(JSONWriterTest, EmptyOutput) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_EQ(content, "[\n\n]\n");
+    EXPECT_EQ(content, "");
 }
 
 TEST_F(JSONWriterTest, SkipHeader) {
@@ -803,7 +803,7 @@ TEST_F(JSONWriterTest, SkipHeader) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    // Should NOT start with "[" when skip_header is true
+    // NDJSON: skip_header means no output preamble; content starts with '{' for the annotation
     EXPECT_TRUE(content.empty() || content[0] != '[');
 }
 
@@ -817,15 +817,15 @@ TEST_F(JSONWriterTest, SingleAnnotation) {
 
     std::string content = read_file(tmp.path());
 
-    // Check top-level structure
+    // Check top-level structure (compact NDJSON: no spaces after colons/commas)
     EXPECT_NE(content.find("\"input\":"), std::string::npos);
-    EXPECT_NE(content.find("\"assembly_name\": \"GRCh38\""), std::string::npos);
-    EXPECT_NE(content.find("\"seq_region_name\": \"chr17\""), std::string::npos);
-    EXPECT_NE(content.find("\"start\": 7675088"), std::string::npos);
-    EXPECT_NE(content.find("\"end\": 7675088"), std::string::npos);
-    EXPECT_NE(content.find("\"allele_string\": \"C/T\""), std::string::npos);
-    EXPECT_NE(content.find("\"strand\": 1"), std::string::npos);
-    EXPECT_NE(content.find("\"most_severe_consequence\": \"missense_variant\""), std::string::npos);
+    EXPECT_NE(content.find("\"assembly_name\":\"GRCh38\""), std::string::npos);
+    EXPECT_NE(content.find("\"seq_region_name\":\"chr17\""), std::string::npos);
+    EXPECT_NE(content.find("\"start\":7675088"), std::string::npos);
+    EXPECT_NE(content.find("\"end\":7675088"), std::string::npos);
+    EXPECT_NE(content.find("\"allele_string\":\"C/T\""), std::string::npos);
+    EXPECT_NE(content.find("\"strand\":1"), std::string::npos);
+    EXPECT_NE(content.find("\"most_severe_consequence\":\"missense_variant\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, TranscriptConsequenceFields) {
@@ -839,15 +839,15 @@ TEST_F(JSONWriterTest, TranscriptConsequenceFields) {
     std::string content = read_file(tmp.path());
 
     EXPECT_NE(content.find("\"transcript_consequences\""), std::string::npos);
-    EXPECT_NE(content.find("\"gene_id\": \"ENSG00000141510\""), std::string::npos);
-    EXPECT_NE(content.find("\"gene_symbol\": \"TP53\""), std::string::npos);
-    EXPECT_NE(content.find("\"transcript_id\": \"ENST00000269305\""), std::string::npos);
-    EXPECT_NE(content.find("\"biotype\": \"protein_coding\""), std::string::npos);
-    EXPECT_NE(content.find("\"canonical\": 1"), std::string::npos);
-    EXPECT_NE(content.find("\"variant_allele\": \"T\""), std::string::npos);
-    EXPECT_NE(content.find("\"consequence_terms\": [\"missense_variant\"]"), std::string::npos);
-    EXPECT_NE(content.find("\"impact\": \"MODERATE\""), std::string::npos);
-    EXPECT_NE(content.find("\"strand\": -1"), std::string::npos);
+    EXPECT_NE(content.find("\"gene_id\":\"ENSG00000141510\""), std::string::npos);
+    EXPECT_NE(content.find("\"gene_symbol\":\"TP53\""), std::string::npos);
+    EXPECT_NE(content.find("\"transcript_id\":\"ENST00000269305\""), std::string::npos);
+    EXPECT_NE(content.find("\"biotype\":\"protein_coding\""), std::string::npos);
+    EXPECT_NE(content.find("\"canonical\":1"), std::string::npos);
+    EXPECT_NE(content.find("\"variant_allele\":\"T\""), std::string::npos);
+    EXPECT_NE(content.find("\"consequence_terms\":[\"missense_variant\"]"), std::string::npos);
+    EXPECT_NE(content.find("\"impact\":\"MODERATE\""), std::string::npos);
+    EXPECT_NE(content.find("\"strand\":-1"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, PositionFields) {
@@ -860,12 +860,12 @@ TEST_F(JSONWriterTest, PositionFields) {
 
     std::string content = read_file(tmp.path());
 
-    EXPECT_NE(content.find("\"cdna_start\": 782"), std::string::npos);
-    EXPECT_NE(content.find("\"cdna_end\": 782"), std::string::npos);
-    EXPECT_NE(content.find("\"cds_start\": 535"), std::string::npos);
-    EXPECT_NE(content.find("\"cds_end\": 535"), std::string::npos);
-    EXPECT_NE(content.find("\"protein_start\": 179"), std::string::npos);
-    EXPECT_NE(content.find("\"protein_end\": 179"), std::string::npos);
+    EXPECT_NE(content.find("\"cdna_start\":782"), std::string::npos);
+    EXPECT_NE(content.find("\"cdna_end\":782"), std::string::npos);
+    EXPECT_NE(content.find("\"cds_start\":535"), std::string::npos);
+    EXPECT_NE(content.find("\"cds_end\":535"), std::string::npos);
+    EXPECT_NE(content.find("\"protein_start\":179"), std::string::npos);
+    EXPECT_NE(content.find("\"protein_end\":179"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, ExonIntronFields) {
@@ -877,7 +877,7 @@ TEST_F(JSONWriterTest, ExonIntronFields) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"exon\": \"5/11\""), std::string::npos);
+    EXPECT_NE(content.find("\"exon\":\"5/11\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, HGVSFields) {
@@ -889,9 +889,9 @@ TEST_F(JSONWriterTest, HGVSFields) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"hgvsc\": \"ENST00000269305.9:c.535A>G\""), std::string::npos);
-    EXPECT_NE(content.find("\"hgvsp\": \"ENSP00000269305.4:p.His179Arg\""), std::string::npos);
-    EXPECT_NE(content.find("\"hgvsg\": \"chr17:g.7675088C>T\""), std::string::npos);
+    EXPECT_NE(content.find("\"hgvsc\":\"ENST00000269305.9:c.535A>G\""), std::string::npos);
+    EXPECT_NE(content.find("\"hgvsp\":\"ENSP00000269305.4:p.His179Arg\""), std::string::npos);
+    EXPECT_NE(content.find("\"hgvsg\":\"chr17:g.7675088C>T\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, AminoAcidsAndCodons) {
@@ -903,8 +903,8 @@ TEST_F(JSONWriterTest, AminoAcidsAndCodons) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"amino_acids\": \"H/R\""), std::string::npos);
-    EXPECT_NE(content.find("\"codons\": \"cAt/cGt\""), std::string::npos);
+    EXPECT_NE(content.find("\"amino_acids\":\"H/R\""), std::string::npos);
+    EXPECT_NE(content.find("\"codons\":\"cAt/cGt\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, ColocatedVariants) {
@@ -917,7 +917,7 @@ TEST_F(JSONWriterTest, ColocatedVariants) {
 
     std::string content = read_file(tmp.path());
     EXPECT_NE(content.find("\"colocated_variants\""), std::string::npos);
-    EXPECT_NE(content.find("\"id\": \"rs28934576\""), std::string::npos);
+    EXPECT_NE(content.find("\"id\":\"rs28934576\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, MultipleColocatedVariants) {
@@ -930,8 +930,8 @@ TEST_F(JSONWriterTest, MultipleColocatedVariants) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"id\": \"rs28934576\""), std::string::npos);
-    EXPECT_NE(content.find("\"id\": \"rs12345\""), std::string::npos);
+    EXPECT_NE(content.find("\"id\":\"rs28934576\""), std::string::npos);
+    EXPECT_NE(content.find("\"id\":\"rs12345\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, NoColocatedVariantsWhenEmpty) {
@@ -971,7 +971,7 @@ TEST_F(JSONWriterTest, AssemblyNameCustom) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"assembly_name\": \"GRCh37\""), std::string::npos);
+    EXPECT_NE(content.find("\"assembly_name\":\"GRCh37\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, MultipleVariantsSeparation) {
@@ -991,12 +991,11 @@ TEST_F(JSONWriterTest, MultipleVariantsSeparation) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    // Should have comma separating two variant objects
-    // The structure is: [\n  {...},\n  {...}\n]\n
-    EXPECT_NE(content.find("},\n"), std::string::npos);
+    // NDJSON: each variant is one line, separated by newline (no comma)
+    EXPECT_NE(content.find("}\n{"), std::string::npos);
     // Two seq_region_name entries
-    size_t first_srn = content.find("\"seq_region_name\": \"chr17\"");
-    size_t second_srn = content.find("\"seq_region_name\": \"chr1\"");
+    size_t first_srn = content.find("\"seq_region_name\":\"chr17\"");
+    size_t second_srn = content.find("\"seq_region_name\":\"chr1\"");
     EXPECT_NE(first_srn, std::string::npos);
     EXPECT_NE(second_srn, std::string::npos);
 }
@@ -1022,13 +1021,13 @@ TEST_F(JSONWriterTest, GroupedTranscripts) {
     EXPECT_NE(content.find("ENST00000445888"), std::string::npos);
     // Verify grouping: only one variant-level object
     // (both transcripts share the same "seq_region_name" block)
-    size_t first_srn = content.find("\"seq_region_name\": \"chr17\"");
+    size_t first_srn = content.find("\"seq_region_name\":\"chr17\"");
     EXPECT_NE(first_srn, std::string::npos);
     // A second occurrence is expected inside colocated_variants, but verify
     // there is no third occurrence (which would indicate a second variant object)
-    size_t second_srn = content.find("\"seq_region_name\": \"chr17\"", first_srn + 1);
+    size_t second_srn = content.find("\"seq_region_name\":\"chr17\"", first_srn + 1);
     if (second_srn != std::string::npos) {
-        size_t third_srn = content.find("\"seq_region_name\": \"chr17\"", second_srn + 1);
+        size_t third_srn = content.find("\"seq_region_name\":\"chr17\"", second_srn + 1);
         // At most two occurrences (variant-level + colocated_variants)
         EXPECT_EQ(third_srn, std::string::npos);
     }
@@ -1044,8 +1043,8 @@ TEST_F(JSONWriterTest, SIFTField) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"sift_prediction\": \"deleterious\""), std::string::npos);
-    EXPECT_NE(content.find("\"sift_score\": 0.01"), std::string::npos);
+    EXPECT_NE(content.find("\"sift_prediction\":\"deleterious\""), std::string::npos);
+    EXPECT_NE(content.find("\"sift_score\":0.01"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, PolyPhenField) {
@@ -1058,8 +1057,8 @@ TEST_F(JSONWriterTest, PolyPhenField) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"polyphen_prediction\": \"probably_damaging\""), std::string::npos);
-    EXPECT_NE(content.find("\"polyphen_score\": 0.997"), std::string::npos);
+    EXPECT_NE(content.find("\"polyphen_prediction\":\"probably_damaging\""), std::string::npos);
+    EXPECT_NE(content.find("\"polyphen_score\":0.997"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, FlagsAsArray) {
@@ -1072,7 +1071,7 @@ TEST_F(JSONWriterTest, FlagsAsArray) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"flags\": [\"cds_start_NF\", \"cds_end_NF\"]"), std::string::npos);
+    EXPECT_NE(content.find("\"flags\":[\"cds_start_NF\",\"cds_end_NF\"]"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, DomainsField) {
@@ -1087,10 +1086,10 @@ TEST_F(JSONWriterTest, DomainsField) {
 
     std::string content = read_file(tmp.path());
     EXPECT_NE(content.find("\"domains\""), std::string::npos);
-    EXPECT_NE(content.find("\"db\": \"Pfam\""), std::string::npos);
-    EXPECT_NE(content.find("\"name\": \"PF00870\""), std::string::npos);
-    EXPECT_NE(content.find("\"db\": \"Interpro\""), std::string::npos);
-    EXPECT_NE(content.find("\"name\": \"IPR011615\""), std::string::npos);
+    EXPECT_NE(content.find("\"db\":\"Pfam\""), std::string::npos);
+    EXPECT_NE(content.find("\"name\":\"PF00870\""), std::string::npos);
+    EXPECT_NE(content.find("\"db\":\"Interpro\""), std::string::npos);
+    EXPECT_NE(content.find("\"name\":\"IPR011615\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, MANEFields) {
@@ -1104,8 +1103,8 @@ TEST_F(JSONWriterTest, MANEFields) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"mane_select\": \"NM_000546.6\""), std::string::npos);
-    EXPECT_NE(content.find("\"mane_plus_clinical\": \"NM_001276695.2\""), std::string::npos);
+    EXPECT_NE(content.find("\"mane_select\":\"NM_000546.6\""), std::string::npos);
+    EXPECT_NE(content.find("\"mane_plus_clinical\":\"NM_001276695.2\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, TSLField) {
@@ -1119,7 +1118,7 @@ TEST_F(JSONWriterTest, TSLField) {
 
     std::string content = read_file(tmp.path());
     // TSL is output as numeric
-    EXPECT_NE(content.find("\"tsl\": 1"), std::string::npos);
+    EXPECT_NE(content.find("\"tsl\":1"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, ProteinIdField) {
@@ -1132,7 +1131,7 @@ TEST_F(JSONWriterTest, ProteinIdField) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"protein_id\": \"ENSP00000269305\""), std::string::npos);
+    EXPECT_NE(content.find("\"protein_id\":\"ENSP00000269305\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, CustomAnnotationNumericValue) {
@@ -1146,7 +1145,7 @@ TEST_F(JSONWriterTest, CustomAnnotationNumericValue) {
 
     std::string content = read_file(tmp.path());
     // Numeric values should be output as numbers (no quotes)
-    EXPECT_NE(content.find("\"my_score\": 0.95"), std::string::npos);
+    EXPECT_NE(content.find("\"my_score\":0.95"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, CustomAnnotationStringValue) {
@@ -1160,7 +1159,7 @@ TEST_F(JSONWriterTest, CustomAnnotationStringValue) {
 
     std::string content = read_file(tmp.path());
     // String values should be quoted
-    EXPECT_NE(content.find("\"my_label\": \"important\""), std::string::npos);
+    EXPECT_NE(content.find("\"my_label\":\"important\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, JSONEscaping) {
@@ -1186,7 +1185,7 @@ TEST_F(JSONWriterTest, IdWithVcfId) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"id\": \"rs28934576\""), std::string::npos);
+    EXPECT_NE(content.find("\"id\":\"rs28934576\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, IdFallbackWithoutVcfId) {
@@ -1200,7 +1199,7 @@ TEST_F(JSONWriterTest, IdFallbackWithoutVcfId) {
 
     std::string content = read_file(tmp.path());
     // Should use CHR_POS_REF/ALT format
-    EXPECT_NE(content.find("\"id\": \"chr17_7675088_C/T\""), std::string::npos);
+    EXPECT_NE(content.find("\"id\":\"chr17_7675088_C/T\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, EmptyAllelesDashInId) {
@@ -1229,7 +1228,7 @@ TEST_F(JSONWriterTest, VariantClassField) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"variant_class\": \"SNV\""), std::string::npos);
+    EXPECT_NE(content.find("\"variant_class\":\"SNV\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, ClinSigInColocated) {
@@ -1257,7 +1256,7 @@ TEST_F(JSONWriterTest, DisplayTermStyle) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"most_severe_consequence\": \"NON_SYNONYMOUS_CODING\""), std::string::npos);
+    EXPECT_NE(content.find("\"most_severe_consequence\":\"NON_SYNONYMOUS_CODING\""), std::string::npos);
     EXPECT_NE(content.find("\"NON_SYNONYMOUS_CODING\""), std::string::npos);
 }
 
@@ -1283,8 +1282,8 @@ TEST_F(JSONWriterTest, RegulatoryConsequences) {
 
     std::string content = read_file(tmp.path());
     EXPECT_NE(content.find("\"regulatory_feature_consequences\""), std::string::npos);
-    EXPECT_NE(content.find("\"biotype\": \"promoter\""), std::string::npos);
-    EXPECT_NE(content.find("\"regulatory_feature_id\": \"ENSR00000012345\""), std::string::npos);
+    EXPECT_NE(content.find("\"biotype\":\"promoter\""), std::string::npos);
+    EXPECT_NE(content.find("\"regulatory_feature_id\":\"ENSR00000012345\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, SourceField) {
@@ -1296,7 +1295,7 @@ TEST_F(JSONWriterTest, SourceField) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"source\": \"Ensembl\""), std::string::npos);
+    EXPECT_NE(content.find("\"source\":\"Ensembl\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, NonCanonicalOmitsCanonicalField) {
@@ -1322,7 +1321,7 @@ TEST_F(JSONWriterTest, DistanceField) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"distance\": 3500"), std::string::npos);
+    EXPECT_NE(content.find("\"distance\":3500"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, NoDistanceWhenZero) {
@@ -2182,7 +2181,7 @@ TEST(OutputEdgeCases, JSONEmptyAlleleStringDash) {
 
     std::string content = read_file(tmp.path());
     // allele_string should show "-/A" for empty ref
-    EXPECT_NE(content.find("\"allele_string\": \"-/A\""), std::string::npos);
+    EXPECT_NE(content.find("\"allele_string\":\"-/A\""), std::string::npos);
 }
 
 TEST(OutputEdgeCases, TSVWriterToFile) {
@@ -2212,7 +2211,7 @@ TEST(OutputEdgeCases, JSONWriterEndPosCalculation) {
 
     std::string content = read_file(tmp.path());
     // end = 7675088 + 3 - 1 = 7675090
-    EXPECT_NE(content.find("\"end\": 7675090"), std::string::npos);
+    EXPECT_NE(content.find("\"end\":7675090"), std::string::npos);
 }
 
 TEST(OutputEdgeCases, JSONMostSevereFromMultipleTranscripts) {
@@ -2235,7 +2234,7 @@ TEST(OutputEdgeCases, JSONMostSevereFromMultipleTranscripts) {
 
     std::string content = read_file(tmp.path());
     // stop_gained is more severe than synonymous_variant
-    EXPECT_NE(content.find("\"most_severe_consequence\": \"stop_gained\""), std::string::npos);
+    EXPECT_NE(content.find("\"most_severe_consequence\":\"stop_gained\""), std::string::npos);
 }
 
 TEST(OutputEdgeCases, VCFWriterStrandPlusStrand) {
@@ -2318,7 +2317,7 @@ TEST(OutputEdgeCases, JSONIntronField) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"intron\": \"4/10\""), std::string::npos);
+    EXPECT_NE(content.find("\"intron\":\"4/10\""), std::string::npos);
     EXPECT_EQ(content.find("\"exon\""), std::string::npos);
 }
 
@@ -2404,8 +2403,8 @@ TEST(OutputEdgeCases, JSONSymbolSourceAndHGNC) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"gene_symbol_source\": \"HGNC\""), std::string::npos);
-    EXPECT_NE(content.find("\"hgnc_id\": \"HGNC:11998\""), std::string::npos);
+    EXPECT_NE(content.find("\"gene_symbol_source\":\"HGNC\""), std::string::npos);
+    EXPECT_NE(content.find("\"hgnc_id\":\"HGNC:11998\""), std::string::npos);
 }
 
 TEST(OutputEdgeCases, VCFDotInfoField) {
@@ -2454,7 +2453,7 @@ TEST_F(JSONWriterTest, ValidIntegerUnquoted) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"test_int\": 42"), std::string::npos);
+    EXPECT_NE(content.find("\"test_int\":42"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, ValidDecimalUnquoted) {
@@ -2467,7 +2466,7 @@ TEST_F(JSONWriterTest, ValidDecimalUnquoted) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"test_dec\": 3.14"), std::string::npos);
+    EXPECT_NE(content.find("\"test_dec\":3.14"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, ValidNegativeUnquoted) {
@@ -2480,7 +2479,7 @@ TEST_F(JSONWriterTest, ValidNegativeUnquoted) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"test_neg\": -0.5"), std::string::npos);
+    EXPECT_NE(content.find("\"test_neg\":-0.5"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, ValidScientificUnquoted) {
@@ -2493,7 +2492,7 @@ TEST_F(JSONWriterTest, ValidScientificUnquoted) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"test_sci\": 1.5e-3"), std::string::npos);
+    EXPECT_NE(content.find("\"test_sci\":1.5e-3"), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, InvalidStringQuoted) {
@@ -2506,7 +2505,7 @@ TEST_F(JSONWriterTest, InvalidStringQuoted) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"test_str\": \"abc\""), std::string::npos);
+    EXPECT_NE(content.find("\"test_str\":\"abc\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, NaNQuoted) {
@@ -2519,7 +2518,7 @@ TEST_F(JSONWriterTest, NaNQuoted) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"test_nan\": \"NaN\""), std::string::npos);
+    EXPECT_NE(content.find("\"test_nan\":\"NaN\""), std::string::npos);
 }
 
 TEST_F(JSONWriterTest, DotNotANumber) {
@@ -2532,7 +2531,7 @@ TEST_F(JSONWriterTest, DotNotANumber) {
     writer.close();
 
     std::string content = read_file(tmp.path());
-    EXPECT_NE(content.find("\"test_dot\": \".\""), std::string::npos);
+    EXPECT_NE(content.find("\"test_dot\":\".\""), std::string::npos);
 }
 
 // ============================================================================

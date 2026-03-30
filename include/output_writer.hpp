@@ -472,7 +472,7 @@ public:
     void set_assembly_name(const std::string& name) { assembly_name_ = name; }
 
     void write_header(const std::vector<std::string>& /*custom_columns*/) override {
-        if (!skip_header_) write_string("[\n");
+        // NDJSON format: no wrapping array (Perl VEP compatibility)
     }
 
     void write_annotation(const VariantAnnotation& ann,
@@ -501,7 +501,7 @@ public:
 
     void write_footer() override {
         flush_current_variant();
-        if (!skip_header_) write_string("\n]\n");
+        // NDJSON format: no closing bracket
     }
 
     void close() override {
@@ -532,7 +532,7 @@ private:
         if (buffered_annotations_.empty()) return;
 
         if (!first_variant_) {
-            write_string(",\n");
+            // NDJSON: just newline between objects (no comma)
         }
         first_variant_ = false;
 
@@ -742,7 +742,33 @@ private:
 
         json << "  }";
 
-        write_string(json.str());
+        // Compact to single-line NDJSON (Perl VEP format: one JSON object per line)
+        std::string json_str = json.str();
+        std::string compact;
+        compact.reserve(json_str.size());
+        bool in_string = false;
+        bool escape_next = false;
+        for (char c : json_str) {
+            if (escape_next) {
+                compact += c;
+                escape_next = false;
+                continue;
+            }
+            if (c == '\\' && in_string) {
+                compact += c;
+                escape_next = true;
+                continue;
+            }
+            if (c == '"') {
+                in_string = !in_string;
+                compact += c;
+                continue;
+            }
+            if (!in_string && (c == '\n' || c == '\r')) continue;
+            if (!in_string && (c == ' ' || c == '\t')) continue;
+            compact += c;
+        }
+        write_string(compact + "\n");
         buffered_annotations_.clear();
         current_variant_key_.clear();
     }
@@ -1380,6 +1406,7 @@ private:
                 case ',': result += "%2C"; break;
                 case ';': result += "%3B"; break;
                 case '=': result += "%3D"; break;
+                case '&': result += "%26"; break;
                 case ' ': result += "%20"; break;
                 case '\t': result += "%09"; break;
                 default: result += c; break;

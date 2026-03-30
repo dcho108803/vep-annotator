@@ -82,6 +82,17 @@ public:
         // Only proceed for splice-site or CDS variants (potential LoF)
         if (!is_splice_site && !is_in_cds) return;
 
+        // Gate: only classify actual LoF consequence types (matching Perl VEP LOFTEE)
+        auto csq_it = annotations.find("_consequences");
+        if (csq_it != annotations.end()) {
+            const std::string& csq = csq_it->second;
+            bool is_lof = (csq.find("splice_acceptor_variant") != std::string::npos ||
+                           csq.find("splice_donor_variant") != std::string::npos ||
+                           csq.find("stop_gained") != std::string::npos ||
+                           csq.find("frameshift_variant") != std::string::npos);
+            if (!is_lof) return;
+        }
+
         // Check for truncating location in last exon
         bool is_last_exon = false;
         bool is_single_exon = (transcript->exons.size() == 1);
@@ -109,9 +120,10 @@ public:
             is_hc = false;  // NMD escape - downgrade to LC
         }
 
-        // Flag: Single exon gene
+        // Flag: Single exon gene (NMD escape - downgrade to LC)
         if (is_single_exon) {
             flags.push_back("SINGLE_EXON");
+            is_hc = false;
         }
 
         // Flag: Incomplete CDS

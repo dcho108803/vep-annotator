@@ -469,6 +469,7 @@ public:
      * Check if codon is a start codon
      */
     static bool is_start_codon(const std::string& codon);
+    static bool is_start_codon(const std::string& codon, const std::string& chromosome);
 
     /**
      * Check if codon is a stop codon

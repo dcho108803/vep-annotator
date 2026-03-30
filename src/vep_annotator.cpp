@@ -228,6 +228,20 @@ bool CodonTable::is_start_codon(const std::string& codon) {
     return upper == "ATG";
 }
 
+bool CodonTable::is_start_codon(const std::string& codon, const std::string& chromosome) {
+    std::string upper = codon;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    // Standard start codon
+    if (upper == "ATG") return true;
+    // Vertebrate mitochondrial alternative start codons (NCBI table 2)
+    std::string norm = chromosome;
+    if (norm.length() > 3 && norm.substr(0, 3) == "chr") norm = norm.substr(3);
+    if (norm == "MT" || norm == "M") {
+        return upper == "ATT" || upper == "ATC" || upper == "ATA" || upper == "GTG";
+    }
+    return false;
+}
+
 bool CodonTable::is_stop_codon(const std::string& codon) {
     std::string upper = codon;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
@@ -321,6 +335,15 @@ int Transcript::get_cds_length() const {
     int length = 0;
     for (const auto& cds : cds_regions) {
         length += cds.end - cds.start + 1;
+    }
+    // Adjust for cds_start_NF phase to match build_cds_sequence() and calculate_cds_position()
+    if (cds_start_NF && !cds_regions.empty()) {
+        int first_phase = (strand == '+')
+            ? cds_regions.front().phase
+            : cds_regions.back().phase;
+        if (first_phase > 0 && first_phase <= 2) {
+            length -= first_phase;
+        }
     }
     return length;
 }
@@ -1958,6 +1981,10 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
     ann.cdna_position = calculate_cdna_position(pos, transcript);
     if (ref.length() > 1) {
         ann.cdna_end = calculate_cdna_position(pos + static_cast<int>(ref.length()) - 1, transcript);
+        // Ensure cdna_position <= cdna_end (minus strand reverses genomic order)
+        if (ann.cdna_position > 0 && ann.cdna_end > 0 && ann.cdna_position > ann.cdna_end) {
+            std::swap(ann.cdna_position, ann.cdna_end);
+        }
     }
 
     // Calculate CDS position and codon changes for coding variants
@@ -2725,6 +2752,7 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 int incomplete_start = cds_length - (cds_length % 3) + 1;
                 if (cds_pos >= incomplete_start) {
                     consequences.push_back(ConsequenceType::INCOMPLETE_TERMINAL_CODON_VARIANT);
+                    return consequences;  // No further coding consequence for incomplete terminal codon
                 }
             }
 
@@ -2848,8 +2876,8 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 if (first_codon == 0 && !ref_segment.empty() && !alt_segment.empty()) {
                     std::string ref_start = ref_segment.substr(0, 3);
                     std::string alt_start = alt_segment.substr(0, 3);
-                    if (CodonTable::is_start_codon(ref_start)) {
-                        if (!CodonTable::is_start_codon(alt_start)) {
+                    if (CodonTable::is_start_codon(ref_start, transcript.chromosome)) {
+                        if (!CodonTable::is_start_codon(alt_start, transcript.chromosome)) {
                             consequences.push_back(ConsequenceType::START_LOST);
                             return consequences;
                         } else if (ref_start != alt_start) {
@@ -3464,7 +3492,16 @@ const Transcript* VEPAnnotator::get_transcript(const std::string& transcript_id)
 int VEPAnnotator::map_cds_to_genomic(int cds_pos, const Transcript& transcript) const {
     if (!transcript.is_coding() || cds_pos <= 0) return 0;
 
+    // Adjust for cds_start_NF phase to match calculate_cds_position()
     int remaining = cds_pos;
+    if (transcript.cds_start_NF && !transcript.cds_regions.empty()) {
+        int first_phase = (transcript.strand == '+')
+            ? transcript.cds_regions.front().phase
+            : transcript.cds_regions.back().phase;
+        if (first_phase > 0 && first_phase <= 2) {
+            remaining += first_phase;
+        }
+    }
     if (transcript.strand == '+') {
         for (const auto& cds : transcript.cds_regions) {
             int cds_len = cds.end - cds.start + 1;

@@ -18,6 +18,8 @@
 #include <memory>
 #include <algorithm>
 #include <set>
+#include <fstream>
+#include <cstdio>
 
 using namespace vep;
 
@@ -256,6 +258,274 @@ TEST(LOFTEE, MultipleFlagsReduceConfidence) {
     double conf = std::stod(conf_it->second);
     // LC with flags should have lower confidence than HC
     EXPECT_LT(conf, 0.9);
+}
+
+// ============================================================================
+// Test Suite: LOFTEE new flags (SMALL_INTRON, EXON_INTRON_UNDEF, NON_CAN_SPLICE)
+// ============================================================================
+
+// Helper: transcript with a small intron (< 15bp gap between exons)
+static Transcript make_small_intron_transcript() {
+    Transcript t;
+    t.id = "ENST_SMALL_INTRON";
+    t.gene_id = "ENSG_SMALL_INTRON";
+    t.gene_name = "SMALLINTRON";
+    t.chromosome = "1";
+    t.start = 1000;
+    t.end = 5000;
+    t.strand = '+';
+    t.biotype = "protein_coding";
+    t.protein_id = "ENSP_SMALL_INTRON";
+
+    // Exon 1: 1000-1200, Exon 2: 1210-1500 (intron = 1210 - 1200 - 1 = 9bp < 15)
+    // Exon 3: 3000-3500 (normal intron)
+    Exon e1; e1.start = 1000; e1.end = 1200; e1.exon_number = 1; e1.phase = 0;
+    Exon e2; e2.start = 1210; e2.end = 1500; e2.exon_number = 2; e2.phase = 0;
+    Exon e3; e3.start = 3000; e3.end = 3500; e3.exon_number = 3; e3.phase = 0;
+    t.exons = {e1, e2, e3};
+
+    CDS c1; c1.start = 1050; c1.end = 1200; c1.phase = 0;
+    CDS c2; c2.start = 1210; c2.end = 1500; c2.phase = 0;
+    CDS c3; c3.start = 3000; c3.end = 3400; c3.phase = 0;
+    t.cds_regions = {c1, c2, c3};
+
+    t.cds_start = 1050;
+    t.cds_end = 3400;
+    return t;
+}
+
+// Helper: transcript with no exons at all
+static Transcript make_no_exon_transcript() {
+    Transcript t;
+    t.id = "ENST_NO_EXON";
+    t.gene_id = "ENSG_NO_EXON";
+    t.gene_name = "NOEXON";
+    t.chromosome = "1";
+    t.start = 1000;
+    t.end = 5000;
+    t.strand = '+';
+    t.biotype = "protein_coding";
+    t.protein_id = "ENSP_NO_EXON";
+
+    // No exons - but has CDS (edge case: malformed annotation)
+    CDS c1; c1.start = 1050; c1.end = 1200; c1.phase = 0;
+    t.cds_regions = {c1};
+    t.cds_start = 1050;
+    t.cds_end = 1200;
+    // exons deliberately empty
+    return t;
+}
+
+TEST(LOFTEE, LCDueToSmallIntron) {
+    auto source = create_loftee_source();
+    auto t = make_small_intron_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+
+    // Variant in exon 2 CDS (not last exon) - should trigger SMALL_INTRON
+    source->annotate("1", 1300, "A", "T", &t, annotations);
+
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    auto flags_it = annotations.find("loftee:flags");
+    ASSERT_NE(flags_it, annotations.end());
+    EXPECT_NE(flags_it->second.find("SMALL_INTRON"), std::string::npos);
+}
+
+TEST(LOFTEE, SmallIntronBoundary14bp) {
+    // Intron of exactly 14bp should still trigger SMALL_INTRON
+    auto source = create_loftee_source();
+    Transcript t;
+    t.id = "ENST_BOUNDARY";
+    t.gene_id = "ENSG_BOUNDARY";
+    t.gene_name = "BOUNDARY";
+    t.chromosome = "1";
+    t.start = 1000;
+    t.end = 5000;
+    t.strand = '+';
+    t.biotype = "protein_coding";
+    t.protein_id = "ENSP_BOUNDARY";
+
+    // Exon 1: 1000-1200, Exon 2: 1215-1500 (intron = 1215 - 1200 - 1 = 14bp < 15)
+    Exon e1; e1.start = 1000; e1.end = 1200; e1.exon_number = 1; e1.phase = 0;
+    Exon e2; e2.start = 1215; e2.end = 1500; e2.exon_number = 2; e2.phase = 0;
+    Exon e3; e3.start = 3000; e3.end = 3500; e3.exon_number = 3; e3.phase = 0;
+    t.exons = {e1, e2, e3};
+
+    CDS c1; c1.start = 1050; c1.end = 1200; c1.phase = 0;
+    CDS c2; c2.start = 1215; c2.end = 1500; c2.phase = 0;
+    CDS c3; c3.start = 3000; c3.end = 3400; c3.phase = 0;
+    t.cds_regions = {c1, c2, c3};
+    t.cds_start = 1050;
+    t.cds_end = 3400;
+
+    std::unordered_map<std::string, std::string> annotations;
+    source->annotate("1", 1300, "A", "T", &t, annotations);
+
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    EXPECT_NE(annotations["loftee:flags"].find("SMALL_INTRON"), std::string::npos);
+}
+
+TEST(LOFTEE, NoSmallIntronWhen15bp) {
+    // Intron of exactly 15bp should NOT trigger SMALL_INTRON
+    auto source = create_loftee_source();
+    Transcript t;
+    t.id = "ENST_OK_INTRON";
+    t.gene_id = "ENSG_OK_INTRON";
+    t.gene_name = "OKINTRON";
+    t.chromosome = "1";
+    t.start = 1000;
+    t.end = 5000;
+    t.strand = '+';
+    t.biotype = "protein_coding";
+    t.protein_id = "ENSP_OK_INTRON";
+
+    // Exon 1: 1000-1200, Exon 2: 1216-1500 (intron = 1216 - 1200 - 1 = 15bp, not < 15)
+    Exon e1; e1.start = 1000; e1.end = 1200; e1.exon_number = 1; e1.phase = 0;
+    Exon e2; e2.start = 1216; e2.end = 1500; e2.exon_number = 2; e2.phase = 0;
+    Exon e3; e3.start = 3000; e3.end = 3500; e3.exon_number = 3; e3.phase = 0;
+    t.exons = {e1, e2, e3};
+
+    CDS c1; c1.start = 1050; c1.end = 1200; c1.phase = 0;
+    CDS c2; c2.start = 1216; c2.end = 1500; c2.phase = 0;
+    CDS c3; c3.start = 3000; c3.end = 3400; c3.phase = 0;
+    t.cds_regions = {c1, c2, c3};
+    t.cds_start = 1050;
+    t.cds_end = 3400;
+
+    std::unordered_map<std::string, std::string> annotations;
+    source->annotate("1", 1300, "A", "T", &t, annotations);
+
+    EXPECT_EQ(annotations["loftee:classification"], "HC");
+    // Either no flags key, or flags present but no SMALL_INTRON
+    auto flags_it = annotations.find("loftee:flags");
+    if (flags_it != annotations.end()) {
+        EXPECT_EQ(flags_it->second.find("SMALL_INTRON"), std::string::npos);
+    }
+}
+
+TEST(LOFTEE, LCDueToExonIntronUndef) {
+    auto source = create_loftee_source();
+    auto t = make_no_exon_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+
+    // Variant in CDS range, but transcript has no exons
+    source->annotate("1", 1100, "A", "T", &t, annotations);
+
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    auto flags_it = annotations.find("loftee:flags");
+    ASSERT_NE(flags_it, annotations.end());
+    EXPECT_NE(flags_it->second.find("EXON_INTRON_UNDEF"), std::string::npos);
+}
+
+TEST(LOFTEE, NoNonCanSpliceWithoutReference) {
+    // Without a reference genome, NON_CAN_SPLICE should not be flagged
+    auto source = create_loftee_source();  // No reference
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+
+    // Variant at splice donor (2bp after exon 1 end: pos 1201 or 1202)
+    annotations["_consequences"] = "splice_donor_variant";
+    source->annotate("1", 1201, "G", "A", &t, annotations);
+
+    // Should still classify (as HC since no flags triggered besides splice)
+    // but should NOT have NON_CAN_SPLICE (no reference to check)
+    auto flags_it = annotations.find("loftee:flags");
+    if (flags_it != annotations.end()) {
+        EXPECT_EQ(flags_it->second.find("NON_CAN_SPLICE"), std::string::npos);
+    }
+}
+
+TEST(LOFTEE, NonCanSpliceWithReference) {
+    // Create a tiny FASTA for testing with non-canonical splice site (GC instead of GT)
+    // The transcript has exon 1 at 1000-1200, so donor is at positions 1201-1202
+    // We'll put "GC" at those positions instead of "GT"
+    std::string fasta_path = "/tmp/loftee_test_ref.fa";
+    {
+        std::ofstream fa(fasta_path);
+        fa << ">1\n";
+        // Build a sequence of 5001 bases (positions 1-5000)
+        // Position 1201-1202 should be GC (non-canonical donor)
+        std::string seq(5000, 'A');
+        seq[1200] = 'G';  // pos 1201 (0-based index 1200)
+        seq[1201] = 'C';  // pos 1202 (0-based index 1201) - GC instead of GT
+        fa << seq << "\n";
+    }
+
+    ReferenceGenome ref(fasta_path, true);
+    auto source = create_loftee_source(&ref);
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+
+    // Variant at splice donor site
+    annotations["_consequences"] = "splice_donor_variant";
+    source->annotate("1", 1201, "G", "A", &t, annotations);
+
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    auto flags_it = annotations.find("loftee:flags");
+    ASSERT_NE(flags_it, annotations.end());
+    EXPECT_NE(flags_it->second.find("NON_CAN_SPLICE"), std::string::npos);
+
+    // Cleanup
+    std::remove(fasta_path.c_str());
+}
+
+TEST(LOFTEE, CanonicalSpliceDonorNoFlag) {
+    // Create a FASTA with canonical GT at donor site - should NOT flag
+    std::string fasta_path = "/tmp/loftee_test_ref_canonical.fa";
+    {
+        std::ofstream fa(fasta_path);
+        fa << ">1\n";
+        std::string seq(5000, 'A');
+        seq[1200] = 'G';  // pos 1201
+        seq[1201] = 'T';  // pos 1202 - canonical GT
+        fa << seq << "\n";
+    }
+
+    ReferenceGenome ref(fasta_path, true);
+    auto source = create_loftee_source(&ref);
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+
+    annotations["_consequences"] = "splice_donor_variant";
+    source->annotate("1", 1201, "G", "A", &t, annotations);
+
+    // Should be HC (canonical splice, no flags)
+    EXPECT_EQ(annotations["loftee:classification"], "HC");
+    auto flags_it = annotations.find("loftee:flags");
+    if (flags_it != annotations.end()) {
+        EXPECT_EQ(flags_it->second.find("NON_CAN_SPLICE"), std::string::npos);
+    }
+
+    std::remove(fasta_path.c_str());
+}
+
+TEST(LOFTEE, NonCanSpliceAcceptor) {
+    // Create a FASTA with non-canonical acceptor (TC instead of AG)
+    // Exon 2 starts at 2000, so acceptor is at positions 1998-1999
+    std::string fasta_path = "/tmp/loftee_test_ref_acceptor.fa";
+    {
+        std::ofstream fa(fasta_path);
+        fa << ">1\n";
+        std::string seq(5000, 'A');
+        seq[1997] = 'T';  // pos 1998 (0-based index 1997) - non-canonical
+        seq[1998] = 'C';  // pos 1999 (0-based index 1998) - TC instead of AG
+        fa << seq << "\n";
+    }
+
+    ReferenceGenome ref(fasta_path, true);
+    auto source = create_loftee_source(&ref);
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+
+    // Variant at splice acceptor site (exon 2, pos 1999)
+    annotations["_consequences"] = "splice_acceptor_variant";
+    source->annotate("1", 1999, "C", "T", &t, annotations);
+
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    auto flags_it = annotations.find("loftee:flags");
+    ASSERT_NE(flags_it, annotations.end());
+    EXPECT_NE(flags_it->second.find("NON_CAN_SPLICE"), std::string::npos);
+
+    std::remove(fasta_path.c_str());
 }
 
 // ============================================================================

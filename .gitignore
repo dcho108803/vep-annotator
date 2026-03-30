@@ -48,3 +48,5 @@ data/
 
 # Clangd cache
 .cache/
+build_release/
+test_data/

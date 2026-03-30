@@ -679,6 +679,12 @@ public:
     const Transcript* get_transcript(const std::string& transcript_id) const;
 
     /**
+     * Get all transcripts overlapping a region (public access for SV annotation)
+     */
+    std::vector<const Transcript*> get_transcripts_in_region(
+        const std::string& chrom, int start, int end) const;
+
+    /**
      * Map CDS position back to genomic coordinate
      */
     int map_cds_to_genomic(int cds_pos, const Transcript& transcript) const;

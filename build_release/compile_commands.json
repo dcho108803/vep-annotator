@@ -1,0 +1,80 @@
+[
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/vep_annotator.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/vep_annotator.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/vep_annotator.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/vep_annotator.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/file_parsers.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/file_parsers.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/file_parsers.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/file_parsers.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/plugin_loader.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/plugin_loader.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/plugin_loader.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/plugin_loader.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/dbnsfp_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/dbnsfp_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/dbnsfp_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/dbnsfp_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/spliceai_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/spliceai_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/spliceai_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/spliceai_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/maxentscan_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/maxentscan_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/maxentscan_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/maxentscan_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/dbscsnv_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/dbscsnv_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/dbscsnv_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/dbscsnv_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/conservation_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/conservation_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/conservation_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/conservation_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/regulatory_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/regulatory_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/regulatory_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/regulatory_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/domain_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/domain_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/domain_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/domain_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -flto=thin -arch arm64 -o CMakeFiles/vep_annotator_lib.dir/src/sources/lof_source.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/sources/lof_source.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/sources/lof_source.cpp",
+  "output": "CMakeFiles/vep_annotator_lib.dir/src/sources/lof_source.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++ -DHAVE_HTSLIB -I/Users/davidcho/Projects/VEP_ensemble_C/include -I/opt/homebrew/include -O3 -DNDEBUG -march=native -std=c++17 -arch arm64 -o CMakeFiles/vep_annotator.dir/src/main.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/main.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/main.cpp",
+  "output": "CMakeFiles/vep_annotator.dir/src/main.cpp.o"
+},
+{
+  "directory": "/Users/davidcho/Projects/VEP_ensemble_C/build_release",
+  "command": "/usr/bin/c++  -I/Users/davidcho/Projects/VEP_ensemble_C/include -O3 -DNDEBUG -march=native -std=c++17 -arch arm64 -o CMakeFiles/filter_vep.dir/src/filter_vep.cpp.o -c /Users/davidcho/Projects/VEP_ensemble_C/src/filter_vep.cpp",
+  "file": "/Users/davidcho/Projects/VEP_ensemble_C/src/filter_vep.cpp",
+  "output": "CMakeFiles/filter_vep.dir/src/filter_vep.cpp.o"
+}
+]

@@ -2164,6 +2164,13 @@ void VEPAnnotator::annotate_noncds_hgvsc(
     const Transcript& transcript,
     VariantAnnotation& ann) {
 
+    // For VCF-style indels with anchor base (ref[0]==alt[0], different lengths),
+    // the HGVS position should be the first changed base (pos+1), not the anchor.
+    int hgvs_pos = pos;
+    if (ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
+        hgvs_pos = pos + 1;
+    }
+
     // Check if variant is intronic (consequences already determined before this call)
     bool is_intronic = std::find(ann.consequences.begin(), ann.consequences.end(),
                                   ConsequenceType::INTRON_VARIANT) != ann.consequences.end();
@@ -2173,7 +2180,7 @@ void VEPAnnotator::annotate_noncds_hgvsc(
             return this->calculate_cds_position(gpos, t);
         };
         std::string intronic_pos = calculate_intronic_hgvsc_position(
-            pos, transcript, calc_cds_fn);
+            hgvs_pos, transcript, calc_cds_fn);
         if (!intronic_pos.empty()) {
             ann.hgvsc = generate_hgvsc_intronic(intronic_pos, ref, alt, transcript, transcript_version_);
         } else {
@@ -2182,10 +2189,10 @@ void VEPAnnotator::annotate_noncds_hgvsc(
             for (size_t i = 0; i + 1 < transcript.exons.size(); ++i) {
                 int intron_start = transcript.exons[i].end + 1;
                 int intron_end = transcript.exons[i + 1].start - 1;
-                if (pos < intron_start || pos > intron_end) continue;
+                if (hgvs_pos < intron_start || hgvs_pos > intron_end) continue;
 
-                int dist_to_prev = pos - transcript.exons[i].end;
-                int dist_to_next = transcript.exons[i + 1].start - pos;
+                int dist_to_prev = hgvs_pos - transcript.exons[i].end;
+                int dist_to_next = transcript.exons[i + 1].start - hgvs_pos;
 
                 // Determine nearest exon boundary in transcript direction
                 int exon_boundary;
@@ -2312,9 +2319,9 @@ void VEPAnnotator::annotate_noncds_hgvsc(
         int distance = 0;
         if (transcript.strand == '+') {
             for (const auto& exon : transcript.exons) {
-                if (exon.end < pos) continue;
+                if (exon.end < hgvs_pos) continue;
                 if (exon.start >= transcript.cds_start) break;
-                int ex_start = std::max(exon.start, pos);
+                int ex_start = std::max(exon.start, hgvs_pos);
                 int ex_end = std::min(exon.end, transcript.cds_start - 1);
                 if (ex_start <= ex_end) {
                     distance += ex_end - ex_start + 1;
@@ -2322,10 +2329,10 @@ void VEPAnnotator::annotate_noncds_hgvsc(
             }
         } else {
             for (auto it = transcript.exons.rbegin(); it != transcript.exons.rend(); ++it) {
-                if (it->start > pos) continue;
+                if (it->start > hgvs_pos) continue;
                 if (it->end <= transcript.cds_end) break;
                 int ex_start = std::max(it->start, transcript.cds_end + 1);
-                int ex_end = std::min(it->end, pos);
+                int ex_end = std::min(it->end, hgvs_pos);
                 if (ex_start <= ex_end) {
                     distance += ex_end - ex_start + 1;
                 }
@@ -2340,9 +2347,9 @@ void VEPAnnotator::annotate_noncds_hgvsc(
         if (transcript.strand == '+') {
             for (const auto& exon : transcript.exons) {
                 if (exon.end <= transcript.cds_end) continue;
-                if (exon.start > pos) break;
+                if (exon.start > hgvs_pos) break;
                 int ex_start = std::max(exon.start, transcript.cds_end + 1);
-                int ex_end = std::min(exon.end, pos);
+                int ex_end = std::min(exon.end, hgvs_pos);
                 if (ex_start <= ex_end) {
                     distance += ex_end - ex_start + 1;
                 }
@@ -2350,8 +2357,8 @@ void VEPAnnotator::annotate_noncds_hgvsc(
         } else {
             for (auto it = transcript.exons.rbegin(); it != transcript.exons.rend(); ++it) {
                 if (it->start >= transcript.cds_start) continue;
-                if (it->end < pos) break;  // past the variant going downward
-                int ex_start = std::max(it->start, pos);
+                if (it->end < hgvs_pos) break;  // past the variant going downward
+                int ex_start = std::max(it->start, hgvs_pos);
                 int ex_end = std::min(it->end, transcript.cds_start - 1);
                 if (ex_start <= ex_end) {
                     distance += ex_end - ex_start + 1;
@@ -2374,6 +2381,13 @@ void VEPAnnotator::annotate_noncoding_hgvsc(
     const Transcript& transcript,
     VariantAnnotation& ann) {
 
+    // For VCF-style indels with anchor base (ref[0]==alt[0], different lengths),
+    // the HGVS position should be the first changed base (pos+1), not the anchor.
+    int hgvs_pos = pos;
+    if (ref.length() != alt.length() && !ref.empty() && !alt.empty() && ref[0] == alt[0]) {
+        hgvs_pos = pos + 1;
+    }
+
     // Check if variant is intronic (consequences already determined before this call)
     bool is_intronic = std::find(ann.consequences.begin(), ann.consequences.end(),
                                   ConsequenceType::INTRON_VARIANT) != ann.consequences.end();
@@ -2384,7 +2398,7 @@ void VEPAnnotator::annotate_noncoding_hgvsc(
             return this->calculate_cdna_position(gpos, t);
         };
         std::string intronic_pos = calculate_intronic_hgvsc_position(
-            pos, transcript, calc_cdna_fn);
+            hgvs_pos, transcript, calc_cdna_fn);
         if (!intronic_pos.empty()) {
             ann.hgvsc = generate_hgvsc_intronic(intronic_pos, ref, alt, transcript, transcript_version_, "n");
         }
@@ -3251,10 +3265,18 @@ static void append_hgvs_change(
     const std::string& hgvs_alt,
     const std::function<std::string(int)>& offset_fn) {
 
+    // Strip VCF anchor base from ref/alt for indels where ref[0]==alt[0]
+    std::string r = hgvs_ref;
+    std::string a = hgvs_alt;
+    if (r.length() != a.length() && !r.empty() && !a.empty() && r[0] == a[0]) {
+        r = r.substr(1);
+        a = a.substr(1);
+    }
+
     if (hgvs_ref.length() == 1 && hgvs_alt.length() == 1) {
         oss << start_pos << hgvs_ref << ">" << hgvs_alt;
     } else if (hgvs_ref.length() > hgvs_alt.length()) {
-        int del_len = static_cast<int>(hgvs_ref.length() - hgvs_alt.length());
+        int del_len = static_cast<int>(r.length());
         if (del_len == 1) {
             oss << start_pos << "del";
         } else {
@@ -3266,7 +3288,7 @@ static void append_hgvs_change(
             }
         }
     } else if (hgvs_alt.length() > hgvs_ref.length()) {
-        std::string inserted = hgvs_alt.substr(hgvs_ref.length());
+        std::string inserted = a;
         std::string end_pos = offset_fn(1);
         if (!end_pos.empty()) {
             oss << start_pos << "_" << end_pos << "ins" << inserted;

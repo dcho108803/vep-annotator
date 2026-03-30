@@ -133,6 +133,11 @@ std::shared_ptr<AnnotationSource> create_interpro_source(const std::string& path
 std::shared_ptr<AnnotationSource> create_loftee_source();
 
 /**
+ * Create LOFTEE-style LoF annotation source with reference genome for splice checks
+ */
+std::shared_ptr<AnnotationSource> create_loftee_source(const ReferenceGenome* ref);
+
+/**
  * Create NMD prediction source
  */
 std::shared_ptr<AnnotationSource> create_nmd_source();

@@ -1866,7 +1866,7 @@ int main(int argc, char* argv[]) {
 
         // Add LoF annotation sources
         if (use_loftee) {
-            auto loftee_source = vep::create_loftee_source();
+            auto loftee_source = vep::create_loftee_source(annotator.get_reference());
             annotator.add_source(loftee_source);
         }
         if (use_nmd) {

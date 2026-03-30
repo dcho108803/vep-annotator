@@ -24,6 +24,21 @@ namespace vep {
  * Classifies loss-of-function variants as High Confidence (HC) or Low Confidence (LC)
  * based on various features like position within transcript, NMD susceptibility, etc.
  */
+// Helper to reverse complement a DNA sequence
+static std::string loftee_reverse_complement(const std::string& seq) {
+    std::string rc(seq.size(), 'N');
+    for (size_t i = 0; i < seq.size(); ++i) {
+        switch (seq[seq.size() - 1 - i]) {
+            case 'A': rc[i] = 'T'; break;
+            case 'T': rc[i] = 'A'; break;
+            case 'C': rc[i] = 'G'; break;
+            case 'G': rc[i] = 'C'; break;
+            default:  rc[i] = 'N'; break;
+        }
+    }
+    return rc;
+}
+
 class LOFTEESource : public AnnotationSource {
 public:
     LOFTEESource() = default;
@@ -40,6 +55,8 @@ public:
         log(LogLevel::INFO, "LOFTEE LoF classifier initialized");
     }
 
+    void set_reference(const ReferenceGenome* ref) { reference_ = ref; }
+
     void annotate(
         const std::string& chrom,
         int pos,
@@ -51,7 +68,6 @@ public:
         if (!transcript) return;
         if (!transcript->is_coding()) return;
 
-        (void)chrom;
         (void)ref;
         (void)alt;
 
@@ -61,15 +77,23 @@ public:
         // - In CDS region (potential stop_gained or frameshift)
         bool is_splice_site = false;
         bool is_in_cds = false;
+        bool is_splice_donor = false;
+        bool is_splice_acceptor = false;
+        int splice_donor_exon_idx = -1;
+        int splice_acceptor_exon_idx = -1;
         for (size_t i = 0; i < transcript->exons.size(); ++i) {
             const auto& exon = transcript->exons[i];
             // Splice acceptor: 2bp before exon start
             if (i > 0 && pos >= exon.start - 2 && pos <= exon.start - 1) {
                 is_splice_site = true;
+                is_splice_acceptor = true;
+                splice_acceptor_exon_idx = static_cast<int>(i);
             }
             // Splice donor: 2bp after exon end
             if (i < transcript->exons.size() - 1 && pos >= exon.end + 1 && pos <= exon.end + 2) {
                 is_splice_site = true;
+                is_splice_donor = true;
+                splice_donor_exon_idx = static_cast<int>(i);
             }
         }
         for (const auto& cds : transcript->cds_regions) {
@@ -138,6 +162,60 @@ public:
             is_hc = false;
         }
 
+        // Flag: EXON_INTRON_UNDEF - transcript has no exons or invalid exon coordinates
+        if (transcript->exons.empty()) {
+            flags.push_back("EXON_INTRON_UNDEF");
+            is_hc = false;
+        }
+
+        // Flag: SMALL_INTRON - any intron in the transcript is < 15bp
+        if (transcript->exons.size() > 1) {
+            for (size_t i = 0; i + 1 < transcript->exons.size(); ++i) {
+                int intron_size = transcript->exons[i + 1].start - transcript->exons[i].end - 1;
+                if (intron_size < 15) {
+                    flags.push_back("SMALL_INTRON");
+                    is_hc = false;
+                    break;  // Only flag once even if multiple small introns
+                }
+            }
+        }
+
+        // Flag: NON_CAN_SPLICE - splice site with non-canonical dinucleotides
+        // For splice_donor_variant: canonical donor is GT (first 2 intronic bases after exon)
+        // For splice_acceptor_variant: canonical acceptor is AG (last 2 intronic bases before exon)
+        if (is_splice_site && reference_ && reference_->has_chromosome(chrom)) {
+            bool is_minus = (transcript->strand == '-');
+
+            if (is_splice_donor && splice_donor_exon_idx >= 0) {
+                const auto& exon = transcript->exons[static_cast<size_t>(splice_donor_exon_idx)];
+                // Donor dinucleotide: 2bp immediately after exon end (genomic)
+                std::string dinuc = reference_->get_sequence(chrom, exon.end + 1, exon.end + 2);
+                if (is_minus) {
+                    dinuc = loftee_reverse_complement(dinuc);
+                }
+                // On + strand: canonical donor is GT; on - strand after RC: canonical is GT
+                // (because the - strand intron starts with GT in transcript orientation)
+                if (dinuc.length() == 2 && dinuc != "GT") {
+                    flags.push_back("NON_CAN_SPLICE");
+                    is_hc = false;
+                }
+            }
+
+            if (is_splice_acceptor && splice_acceptor_exon_idx >= 0) {
+                const auto& exon = transcript->exons[static_cast<size_t>(splice_acceptor_exon_idx)];
+                // Acceptor dinucleotide: 2bp immediately before exon start (genomic)
+                std::string dinuc = reference_->get_sequence(chrom, exon.start - 2, exon.start - 1);
+                if (is_minus) {
+                    dinuc = loftee_reverse_complement(dinuc);
+                }
+                // On + strand: canonical acceptor is AG; on - strand after RC: canonical is AG
+                if (dinuc.length() == 2 && dinuc != "AG") {
+                    flags.push_back("NON_CAN_SPLICE");
+                    is_hc = false;
+                }
+            }
+        }
+
         // Set annotations
         if (is_hc) {
             annotations["loftee:classification"] = "HC";
@@ -172,6 +250,9 @@ public:
     }
 
     bool is_thread_safe() const override { return true; }
+
+private:
+    const ReferenceGenome* reference_ = nullptr;
 };
 
 /**
@@ -427,6 +508,12 @@ private:
  */
 std::shared_ptr<AnnotationSource> create_loftee_source() {
     return std::make_shared<LOFTEESource>();
+}
+
+std::shared_ptr<AnnotationSource> create_loftee_source(const ReferenceGenome* ref) {
+    auto source = std::make_shared<LOFTEESource>();
+    source->set_reference(ref);
+    return source;
 }
 
 std::shared_ptr<AnnotationSource> create_nmd_source() {

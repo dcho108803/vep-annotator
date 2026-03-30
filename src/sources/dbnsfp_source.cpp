@@ -89,8 +89,6 @@ public:
         ensure_initialized();
         if (!reader_) return;
 
-        (void)transcript;  // Not used for dbNSFP
-
         // Query dbNSFP at this position
         auto records = reader_->query(chrom, pos);
 
@@ -124,6 +122,27 @@ public:
 
                 if (!found_alt) continue;
 
+                // Determine per-transcript index from Ensembl_transcriptid column
+                // Many dbNSFP score fields (SIFT, PolyPhen, etc.) are semicolon-separated
+                // per-transcript, NOT per-alt. The Ensembl_transcriptid column maps indices.
+                int transcript_index = -1;
+                if (transcript) {
+                    auto tid_it = record.find("Ensembl_transcriptid");
+                    if (tid_it != record.end() && !tid_it->second.empty()) {
+                        std::string query_id = strip_version(transcript->id);
+                        std::istringstream tss(tid_it->second);
+                        std::string tid;
+                        int tidx = 0;
+                        while (std::getline(tss, tid, ';')) {
+                            if (strip_version(tid) == query_id) {
+                                transcript_index = tidx;
+                                break;
+                            }
+                            ++tidx;
+                        }
+                    }
+                }
+
                 // Extract requested fields
                 for (const auto& field : requested_fields_) {
                     auto col_it = record.find(field.column);
@@ -138,9 +157,9 @@ public:
                             while (std::getline(vss, v, ';')) {
                                 values.push_back(v);
                             }
-                            if (alt_index < values.size()) {
-                                value = values[alt_index];
-                            }
+
+                            value = select_value_for_transcript(
+                                values, transcript_index, alt_index);
                         }
 
                         // Skip missing values
@@ -203,7 +222,8 @@ public:
 
                 if (!found_alt) continue;
 
-                // Found match - copy all requested fields with alt-index extraction
+                // Found match - copy all requested fields
+                // query() has no transcript context, so fall back to first valid value
                 for (const auto& field : requested_fields_) {
                     auto col_it = record.find(field.column);
                     if (col_it != record.end() && col_it->second != "." && !col_it->second.empty()) {
@@ -216,9 +236,9 @@ public:
                             while (std::getline(vss, v, ';')) {
                                 values.push_back(v);
                             }
-                            if (alt_index < values.size()) {
-                                value = values[alt_index];
-                            }
+                            // No transcript context available, use first valid value
+                            value = select_value_for_transcript(
+                                values, -1, alt_index);
                         }
                         if (value != "." && !value.empty()) {
                             result["dbnsfp:" + field.name] = value;
@@ -260,6 +280,62 @@ public:
     }
 
 private:
+    /**
+     * Strip version suffix from transcript ID (e.g., "ENST00000269305.8" -> "ENST00000269305")
+     */
+    static std::string strip_version(const std::string& id) {
+        auto dot = id.rfind('.');
+        if (dot != std::string::npos) {
+            // Only strip if what follows the dot is numeric (a version number)
+            bool all_digits = true;
+            for (size_t i = dot + 1; i < id.size(); ++i) {
+                if (!std::isdigit(static_cast<unsigned char>(id[i]))) {
+                    all_digits = false;
+                    break;
+                }
+            }
+            if (all_digits && dot + 1 < id.size()) {
+                return id.substr(0, dot);
+            }
+        }
+        return id;
+    }
+
+    /**
+     * Select the best value from a semicolon-split multi-value field.
+     *
+     * Many dbNSFP fields (SIFT_score, Polyphen2_HDIV_score, etc.) are per-transcript:
+     * the semicolons separate values for different transcripts (matching Ensembl_transcriptid).
+     *
+     * Strategy:
+     * 1. If a matching transcript index was found, use that value (if valid).
+     * 2. Otherwise, fall back to the first non-empty/non-"." value.
+     */
+    static std::string select_value_for_transcript(
+        const std::vector<std::string>& values,
+        int transcript_index,
+        size_t /*alt_index*/)
+    {
+        // Try transcript-matched index first
+        if (transcript_index >= 0 &&
+            static_cast<size_t>(transcript_index) < values.size()) {
+            const std::string& v = values[static_cast<size_t>(transcript_index)];
+            if (!v.empty() && v != ".") {
+                return v;
+            }
+        }
+
+        // Fall back to first valid value
+        for (const auto& v : values) {
+            if (!v.empty() && v != ".") {
+                return v;
+            }
+        }
+
+        // All values are missing
+        return ".";
+    }
+
     std::string path_;
     std::string field_spec_;
     std::vector<DbNSFPField> requested_fields_;

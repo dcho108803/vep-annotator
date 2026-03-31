@@ -57,6 +57,7 @@ public:
         ensure_initialized();
         if (!db_) return;
 
+        (void)alt;
         (void)transcript;
 
         // Query region based on variant extent

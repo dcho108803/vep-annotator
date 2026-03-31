@@ -672,8 +672,8 @@ int main(int argc, char* argv[]) {
     vep::OutputFormat output_format = vep::OutputFormat::TSV;
     bool compress_output = false;
     bool show_stats = false;
-    bool include_hgvsg = false;
-    bool include_spdi = false;
+    bool include_hgvsg [[maybe_unused]] = false;
+    bool include_spdi [[maybe_unused]] = false;
     bool include_numbers = false;
 
     // HGVS input
@@ -812,8 +812,8 @@ int main(int argc, char* argv[]) {
 
     // Additional Perl VEP compat flags
     bool show_ref_allele = false;        // --show_ref_allele
-    bool use_given_ref = false;          // --use_given_ref
-    bool dont_skip = false;             // --dont_skip
+    bool use_given_ref [[maybe_unused]] = false;          // --use_given_ref
+    bool dont_skip [[maybe_unused]] = false;             // --dont_skip
 
     // SIFT/PolyPhen display flags
     // Values: "" = off, "p" = prediction, "s" = score, "b" = both
@@ -827,7 +827,7 @@ int main(int argc, char* argv[]) {
 
     // Per-sample annotation
     std::string individual;              // --individual (comma-separated sample names, or "all")
-    bool phased = false;                 // --phased
+    bool phased [[maybe_unused]] = false;                 // --phased
 
     // Population frequency flags
     bool show_af = false;                // --af (show allele frequencies)

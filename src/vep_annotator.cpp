@@ -2023,7 +2023,7 @@ void VEPAnnotator::annotate_coding_region(
     const std::string& cached_cds,
     int cds_pos,
     VariantAnnotation& ann) {
-    (void)pos; // cds_pos passed directly, pos retained for potential future use
+    (void)chrom; (void)pos; // cds_pos passed directly
 
     ann.cds_position = cds_pos;
     ann.protein_position = (cds_pos - 1) / 3 + 1;
@@ -3816,7 +3816,7 @@ void VEPAnnotator::append_regulatory_consequences(VariantAnnotation& ann) {
 std::tuple<int, std::string, std::string> VEPAnnotator::right_normalize(
     const std::string& chrom, int pos,
     const std::string& ref, const std::string& alt,
-    const Transcript& transcript) const {
+    const Transcript& /*transcript*/) const {
 
     if (ref.length() == alt.length()) {
         return {pos, ref, alt};

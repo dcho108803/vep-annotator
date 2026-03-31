@@ -458,9 +458,9 @@ TEST(SVConsequences, DUPContainingTranscript) {
 TEST(SVConsequences, DELPartialOverlapExon) {
     Transcript t = make_coding_transcript();
     // Add exons to the transcript
-    t.exons.push_back({1200, 1400});
-    t.exons.push_back({2000, 2200});
-    t.exons.push_back({3000, 3200});
+    t.exons.push_back({1200, 1400, 1, 0});
+    t.exons.push_back({2000, 2200, 2, 0});
+    t.exons.push_back({3000, 3200, 3, 0});
 
     StructuralVariant sv;
     sv.sv_type = SVType::DEL;
@@ -485,8 +485,8 @@ TEST(SVConsequences, DELPartialOverlapExon) {
 
 TEST(SVConsequences, INSAtIntronPosition) {
     Transcript t = make_coding_transcript();
-    t.exons.push_back({1200, 1400});
-    t.exons.push_back({2000, 2200});
+    t.exons.push_back({1200, 1400, 1, 0});
+    t.exons.push_back({2000, 2200, 2, 0});
 
     StructuralVariant sv;
     sv.sv_type = SVType::INS;

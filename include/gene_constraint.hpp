@@ -174,7 +174,7 @@ public:
                 if (val.empty() || val == "NA" || val == "." || val == "NaN") return -1.0;
                 try {
                     return std::stod(val);
-                } catch (...) {
+                } catch (const std::exception&) {
                     return -1.0;
                 }
             };
@@ -187,7 +187,7 @@ public:
                 if (val.empty() || val == "NA" || val == ".") return 0;
                 try {
                     return std::stoi(val);
-                } catch (...) {
+                } catch (const std::exception&) {
                     return 0;
                 }
             };

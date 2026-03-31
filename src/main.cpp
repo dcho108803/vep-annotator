@@ -242,7 +242,7 @@ void post_process_annotations(std::vector<vep::VariantAnnotation>& annotations,
                                 max_af_pop = key.substr(colon_pos + 1);
                             }
                         }
-                    } catch (...) {}
+                    } catch (const std::exception&) {}
                 }
             }
             if (max_af > 0.0) {
@@ -358,7 +358,7 @@ bool parse_variant(const std::string& variant, std::string& chrom, int& pos,
         ref = variant.substr(p2 + 1, p3 - p2 - 1);
         alt = variant.substr(p3 + 1);
         return true;
-    } catch (...) {
+    } catch (const std::exception&) {
         return false;
     }
 }
@@ -407,7 +407,7 @@ InputFormat detect_input_format(const std::string& line) {
                 std::stoi(f2);
                 std::stoi(f3);
                 return InputFormat::BED;
-            } catch (...) {}
+            } catch (const std::exception&) {}
         }
     }
 
@@ -423,7 +423,7 @@ InputFormat detect_input_format(const std::string& line) {
                 if (f4.find('/') != std::string::npos) {
                     return InputFormat::ENSEMBL;
                 }
-            } catch (...) {}
+            } catch (const std::exception&) {}
         }
     }
 
@@ -440,7 +440,7 @@ bool parse_ensembl_line(const std::string& line, std::string& chrom, int& pos,
 
     try {
         pos = std::stoi(start_str);
-    } catch (...) { return false; }
+    } catch (const std::exception&) { return false; }
 
     // Parse alleles: REF/ALT
     size_t slash = alleles.find('/');
@@ -469,7 +469,7 @@ bool parse_bed_line(const std::string& line, std::string& chrom, int& pos,
         pos = start + 1;  // BED is 0-based, convert to 1-based
         ref = "-";
         alt = "-";
-    } catch (...) { return false; }
+    } catch (const std::exception&) { return false; }
 
     return true;
 }
@@ -555,7 +555,7 @@ public:
             try {
                 iv.start = std::stoi(start_s);
                 iv.end = std::stoi(end_s);
-            } catch (...) { continue; }
+            } catch (const std::exception&) { continue; }
 
             std::string field;
             if (iss >> field) iv.name = field;
@@ -959,7 +959,7 @@ int main(int argc, char* argv[]) {
             filter_config.freq_pop = argv[++i];
         } else if (arg == "--freq-threshold" && i + 1 < argc) {
             try { filter_config.freq_threshold = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Warning: invalid --freq-threshold value, using default\n"; }
+            catch (const std::exception&) { std::cerr << "Warning: invalid --freq-threshold value, using default\n"; }
         } else if (arg == "--freq-gt") {
             filter_config.freq_gt = true;
         }
@@ -1070,7 +1070,7 @@ int main(int argc, char* argv[]) {
             spliceai_indel_path = argv[++i];
         } else if (arg == "--spliceai-cutoff" && i + 1 < argc) {
             try { spliceai_cutoff = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Warning: invalid --spliceai-cutoff value, ignored\n"; }
+            catch (const std::exception&) { std::cerr << "Warning: invalid --spliceai-cutoff value, ignored\n"; }
         } else if (arg == "--maxentscan") {
             use_maxentscan = true;
         } else if (arg == "--dbscsnv" && i + 1 < argc) {
@@ -1131,7 +1131,7 @@ int main(int argc, char* argv[]) {
                         if (key == "snv") spliceai_snv_path = val;
                         else if (key == "indel") spliceai_indel_path = val;
                         else if (key == "cutoff") {
-                            try { spliceai_cutoff = std::stod(val); } catch (...) {}
+                            try { spliceai_cutoff = std::stod(val); } catch (const std::exception&) {}
                         }
                     }
                 }
@@ -1253,7 +1253,7 @@ int main(int argc, char* argv[]) {
                     upstream_distance = std::stoi(dist_str);
                     downstream_distance = upstream_distance;
                 }
-            } catch (...) { std::cerr << "Warning: invalid --distance value, using default\n"; }
+            } catch (const std::exception&) { std::cerr << "Warning: invalid --distance value, using default\n"; }
         }
         // Variant class (Phase A4)
         else if (arg == "--variant-class") {
@@ -1428,7 +1428,7 @@ int main(int argc, char* argv[]) {
             vcf_path = "-";  // Will be overridden by input_data_string
         } else if (arg == "--fork" && i + 1 < argc) {
             try { fork_count = std::stoi(argv[++i]); }
-            catch (...) { fork_count = 1; }
+            catch (const std::exception&) { fork_count = 1; }
             if (fork_count < 1) fork_count = 1;
         } else if (arg == "--individual" && i + 1 < argc) {
             individual = argv[++i];
@@ -2158,8 +2158,8 @@ int main(int argc, char* argv[]) {
 
             if (fork_count > 1) {
                 // Phase 1: Read ALL input lines into memory
-                for (const auto& prl : pre_read_lines) {
-                    buffered_lines.push_back(prl);
+                for (auto& prl : pre_read_lines) {
+                    buffered_lines.push_back(std::move(prl));
                 }
                 pre_read_lines.clear();
 
@@ -2218,7 +2218,7 @@ int main(int argc, char* argv[]) {
                     std::string q_chrom = bl.substr(0, t1);
                     int q_pos = 0;
                     try { q_pos = std::stoi(bl.substr(t1 + 1, t2 - t1 - 1)); }
-                    catch (...) { continue; }
+                    catch (const std::exception&) { continue; }
                     std::string q_ref = bl.substr(t3 + 1, t4 - t3 - 1);
                     size_t t5 = bl.find('\t', t4 + 1);
                     std::string q_alt_str = (t5 != std::string::npos)
@@ -2444,7 +2444,7 @@ int main(int argc, char* argv[]) {
                         }
                         if (vcf_fields.size() >= 5) {
                             chrom = vcf_fields[0];
-                            try { pos = std::stoi(vcf_fields[1]); } catch (...) { pos = 0; }
+                            try { pos = std::stoi(vcf_fields[1]); } catch (const std::exception&) { pos = 0; }
                             id = vcf_fields[2];
                             ref = vcf_fields[3];
                             alt = vcf_fields[4];

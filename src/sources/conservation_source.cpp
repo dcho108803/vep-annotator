@@ -158,7 +158,7 @@ public:
                 if (!interp.empty()) {
                     annotations["phylop:interpretation"] = interp;
                 }
-            } catch (...) {}
+            } catch (const std::exception&) {}
         }
     }
 
@@ -208,7 +208,7 @@ public:
                 if (!interp.empty()) {
                     annotations["phastcons:interpretation"] = interp;
                 }
-            } catch (...) {}
+            } catch (const std::exception&) {}
         }
     }
 
@@ -259,7 +259,7 @@ public:
                 if (!interp.empty()) {
                     annotations["gerp:interpretation"] = interp;
                 }
-            } catch (...) {}
+            } catch (const std::exception&) {}
         }
     }
 

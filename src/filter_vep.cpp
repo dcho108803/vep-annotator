@@ -144,16 +144,16 @@ int main(int argc, char* argv[]) {
             config.biotype_filter = parse_comma_list(argv[++i]);
         } else if (arg == "--min-af" && i + 1 < argc) {
             try { config.min_af = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Error: invalid numeric value for --min-af: " << argv[i] << std::endl; return 1; }
+            catch (const std::exception&) { std::cerr << "Error: invalid numeric value for --min-af: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--max-af" && i + 1 < argc) {
             try { config.max_af = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Error: invalid numeric value for --max-af: " << argv[i] << std::endl; return 1; }
+            catch (const std::exception&) { std::cerr << "Error: invalid numeric value for --max-af: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--min-cadd" && i + 1 < argc) {
             try { config.min_cadd = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Error: invalid numeric value for --min-cadd: " << argv[i] << std::endl; return 1; }
+            catch (const std::exception&) { std::cerr << "Error: invalid numeric value for --min-cadd: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--min-revel" && i + 1 < argc) {
             try { config.min_revel = std::stod(argv[++i]); }
-            catch (...) { std::cerr << "Error: invalid numeric value for --min-revel: " << argv[i] << std::endl; return 1; }
+            catch (const std::exception&) { std::cerr << "Error: invalid numeric value for --min-revel: " << argv[i] << std::endl; return 1; }
         } else if (arg == "--coding-only") {
             config.coding_only = true;
         } else if (arg == "--exclude-intergenic") {

@@ -614,20 +614,20 @@ GFF3Database::GFF3Database(
         feat.source = fields[1];
         feat.type = type;
         try { feat.start = std::stoi(fields[3]); }
-        catch (...) { continue; }
+        catch (const std::exception&) { continue; }
         try { feat.end = std::stoi(fields[4]); }
-        catch (...) { continue; }
+        catch (const std::exception&) { continue; }
 
         if (fields[5] != ".") {
             try { feat.score = std::stod(fields[5]); }
-            catch (...) {}
+            catch (const std::exception&) {}
         }
 
         feat.strand = fields[6].empty() ? '.' : fields[6][0];
 
         if (fields[7] != ".") {
             try { feat.phase = std::stoi(fields[7]); }
-            catch (...) {}
+            catch (const std::exception&) {}
         }
 
         // Parse attributes

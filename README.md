@@ -17,7 +17,7 @@ git clone https://github.com/dcho108803/vep-annotator.git
 cd vep-annotator && mkdir build && cd build
 cmake .. && make -j4
 
-# Run tests (1014 tests)
+# Run tests (1022 tests)
 ./vep_tests
 
 # Annotate a single variant

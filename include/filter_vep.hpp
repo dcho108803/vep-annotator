@@ -148,7 +148,7 @@ struct FilterableRecord {
         }
         try {
             return std::stod(val);
-        } catch (...) {
+        } catch (const std::exception&) {
             return std::numeric_limits<double>::quiet_NaN();
         }
     }
@@ -182,7 +182,7 @@ inline bool apply_condition(const FilterableRecord& record, const FilterConditio
         try {
             num_value = std::stod(value);
             num_target = std::stod(cond.value);
-        } catch (...) {
+        } catch (const std::exception&) {
             is_numeric = false;
         }
     }

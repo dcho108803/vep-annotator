@@ -45,7 +45,7 @@ static bool parse_variant(const std::string& variant, std::string& chrom, int& p
         ref = variant.substr(p2 + 1, p3 - p2 - 1);
         alt = variant.substr(p3 + 1);
         return true;
-    } catch (...) {
+    } catch (const std::exception&) {
         return false;
     }
 }
@@ -92,7 +92,7 @@ static InputFormat detect_input_format(const std::string& line) {
                 std::stoi(f2);
                 std::stoi(f3);
                 return InputFormat::BED;
-            } catch (...) {}
+            } catch (const std::exception&) {}
         }
     }
 
@@ -107,7 +107,7 @@ static InputFormat detect_input_format(const std::string& line) {
                 if (f4.find('/') != std::string::npos) {
                     return InputFormat::ENSEMBL;
                 }
-            } catch (...) {}
+            } catch (const std::exception&) {}
         }
     }
 
@@ -124,7 +124,7 @@ static bool parse_ensembl_line(const std::string& line, std::string& chrom, int&
 
     try {
         pos = std::stoi(start_str);
-    } catch (...) { return false; }
+    } catch (const std::exception&) { return false; }
 
     size_t slash = alleles.find('/');
     if (slash == std::string::npos) return false;
@@ -151,7 +151,7 @@ static bool parse_bed_line(const std::string& line, std::string& chrom, int& pos
         pos = start + 1;  // BED is 0-based, convert to 1-based
         ref = "-";
         alt = "-";
-    } catch (...) { return false; }
+    } catch (const std::exception&) { return false; }
 
     return true;
 }
@@ -1166,7 +1166,7 @@ static bool parse_vcf_line(const std::string& line, VCFFields& fields) {
     }
     try {
         fields.pos = std::stoi(pos_str);
-    } catch (...) {
+    } catch (const std::exception&) {
         return false;
     }
     fields.alt_alleles = split_alt_alleles(fields.alt);

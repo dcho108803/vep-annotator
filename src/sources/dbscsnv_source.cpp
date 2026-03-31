@@ -105,12 +105,12 @@ public:
                 if (ada_it != record.end() && ada_it->second != ".") {
                     ada = std::stod(ada_it->second);
                 }
-            } catch (...) {}
+            } catch (const std::exception&) {}
             try {
                 if (rf_it != record.end() && rf_it->second != ".") {
                     rf = std::stod(rf_it->second);
                 }
-            } catch (...) {}
+            } catch (const std::exception&) {}
 
             double max_score = std::max(ada, rf);
             if (max_score > 0) {

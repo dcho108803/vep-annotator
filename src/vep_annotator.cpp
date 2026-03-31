@@ -15,6 +15,7 @@
 #include <ctime>
 #include <iomanip>
 #include <atomic>
+#include <mutex>
 #include <zlib.h>
 
 // Tabix support via htslib (optional - compile with -DHAVE_HTSLIB)
@@ -77,6 +78,10 @@ void log(LogLevel level, const std::string& message) {
 
     struct tm time_buf;
     localtime_r(&time_t_now, &time_buf);
+
+    // Protect against interleaved output from concurrent threads (--fork mode)
+    static std::mutex log_mutex;
+    std::lock_guard<std::mutex> lock(log_mutex);
     std::cerr << std::put_time(&time_buf, "%Y-%m-%d %H:%M:%S")
               << " - " << level_str << " - " << message << std::endl;
 }
@@ -419,7 +424,7 @@ std::optional<double> VariantAnnotation::get_annotation_double(
     if (value.has_value()) {
         try {
             return std::stod(value.value());
-        } catch (...) {
+        } catch (const std::exception&) {
             return std::nullopt;
         }
     }
@@ -1392,7 +1397,7 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
                     // Value may be "1 (assigned to previous version)"
                     std::string tsl_str = attrs["transcript_support_level"];
                     tr.tsl = std::stoi(tsl_str);
-                } catch (...) {}
+                } catch (const std::exception&) {}
             }
 
             // Extract CCDS and protein IDs from GTF attributes
@@ -1421,7 +1426,7 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
                 exon.exon_number = 0;
                 if (attrs.count("exon_number")) {
                     try { exon.exon_number = std::stoi(attrs["exon_number"]); }
-                    catch (...) {}
+                    catch (const std::exception&) {}
                 }
 
                 pimpl_->transcripts[transcript_id].exons.push_back(exon);
@@ -1435,7 +1440,7 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
                 cds.phase = 0;
                 if (frame != ".") {
                     try { cds.phase = std::stoi(frame); }
-                    catch (...) {}
+                    catch (const std::exception&) {}
                 }
 
                 Transcript& tr = pimpl_->transcripts[transcript_id];

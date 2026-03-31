@@ -14,6 +14,16 @@
 
 namespace vep {
 
+// RAII wrapper for dlopen handles to prevent leaks on error paths
+struct DlHandleGuard {
+    void* handle = nullptr;
+    explicit DlHandleGuard(void* h) : handle(h) {}
+    ~DlHandleGuard() { if (handle) dlclose(handle); }
+    void release() { handle = nullptr; }
+    DlHandleGuard(const DlHandleGuard&) = delete;
+    DlHandleGuard& operator=(const DlHandleGuard&) = delete;
+};
+
 PluginLoader::~PluginLoader() {
     // Unload all plugins in reverse order
     for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
@@ -26,33 +36,32 @@ bool PluginLoader::load_plugin(const std::string& path, const std::string& confi
     // Clear any previous error
     dlerror();
 
-    // Open the shared library
-    void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (!handle) {
+    // Open the shared library (RAII guard ensures cleanup on error)
+    void* raw_handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!raw_handle) {
         last_error_ = "Failed to load plugin: " + std::string(dlerror());
         log(LogLevel::ERROR, last_error_);
         return false;
     }
+    DlHandleGuard handle_guard(raw_handle);
 
     // Find the create_plugin function
     CreatePluginFunc create_func = reinterpret_cast<CreatePluginFunc>(
-        dlsym(handle, "create_plugin")
+        dlsym(raw_handle, "create_plugin")
     );
     if (!create_func) {
         last_error_ = "Plugin missing create_plugin function: " + path;
         log(LogLevel::ERROR, last_error_);
-        dlclose(handle);
         return false;
     }
 
     // Find the destroy_plugin function
     DestroyPluginFunc destroy_func = reinterpret_cast<DestroyPluginFunc>(
-        dlsym(handle, "destroy_plugin")
+        dlsym(raw_handle, "destroy_plugin")
     );
     if (!destroy_func) {
         last_error_ = "Plugin missing destroy_plugin function: " + path;
         log(LogLevel::ERROR, last_error_);
-        dlclose(handle);
         return false;
     }
 
@@ -63,14 +72,12 @@ bool PluginLoader::load_plugin(const std::string& path, const std::string& confi
     } catch (const std::exception& e) {
         last_error_ = "Plugin creation failed: " + std::string(e.what());
         log(LogLevel::ERROR, last_error_);
-        dlclose(handle);
         return false;
     }
 
     if (!plugin) {
         last_error_ = "Plugin creation returned null: " + path;
         log(LogLevel::ERROR, last_error_);
-        dlclose(handle);
         return false;
     }
 
@@ -97,7 +104,6 @@ bool PluginLoader::load_plugin(const std::string& path, const std::string& confi
         last_error_ = "Plugin configuration invalid: " + validation_error;
         log(LogLevel::ERROR, last_error_);
         destroy_func(plugin);
-        dlclose(handle);
         return false;
     }
 
@@ -106,13 +112,13 @@ bool PluginLoader::load_plugin(const std::string& path, const std::string& confi
         last_error_ = "Plugin initialization failed: " + path;
         log(LogLevel::ERROR, last_error_);
         destroy_func(plugin);
-        dlclose(handle);
         return false;
     }
 
-    // Store the loaded plugin
+    // Store the loaded plugin — release guard so handle isn't closed
+    handle_guard.release();
     LoadedPlugin lp;
-    lp.handle = handle;
+    lp.handle = raw_handle;
     lp.plugin = plugin;
     lp.destroy_func = destroy_func;
     lp.path = path;
@@ -184,8 +190,8 @@ void PluginLoader::unload_plugin(LoadedPlugin& p) {
     if (p.plugin && p.destroy_func) {
         try {
             p.destroy_func(p.plugin);
-        } catch (...) {
-            log(LogLevel::WARNING, "Plugin destruction failed: " + p.path);
+        } catch (const std::exception& e) {
+            log(LogLevel::WARNING, "Plugin destruction failed (" + p.path + "): " + e.what());
         }
     }
     if (p.handle) {

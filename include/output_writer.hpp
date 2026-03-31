@@ -190,7 +190,7 @@ inline std::string format_protein_position(const VariantAnnotation& ann, const s
         try {
             int cds_len = std::stoi(cl->second);
             if (cds_len >= 3) s += "/" + std::to_string((cds_len / 3) - 1);
-        } catch (...) {}
+        } catch (const std::exception&) {}
     }
     return s;
 }

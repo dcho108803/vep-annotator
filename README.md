@@ -4,7 +4,7 @@ A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VE
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![Tests](https://img.shields.io/badge/tests-1014%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1022%20passing-brightgreen.svg)]()
 
 ## Quick Start
 
@@ -172,7 +172,7 @@ Use `--annotation-tabix` instead of `--annotation` for large VCF files to minimi
 
 ## Testing
 
-1014 GoogleTest unit tests across 11 test suites:
+1022 GoogleTest unit tests across 11 test suites:
 
 | Test Suite | Tests | Coverage |
 |------------|------:|----------|
@@ -183,11 +183,11 @@ Use `--annotation-tabix` instead of `--annotation` for large VCF files to minimi
 | HGVS | 90 | Parsing, HGVSg generation, SPDI, RefSeq mapping, edge cases |
 | Consequences | 84 | SO terms, impact levels, ranking, variant class, display terms |
 | Structural Variants | 60 | SV types, BND parsing, consequences, overlap, properties |
-| Annotation Sources | 40 | LOFTEE, NMD, MaxEntScan, dbNSFP, source manager, domains |
+| Annotation Sources | 48 | LOFTEE, NMD, MaxEntScan, dbNSFP, source manager, domains |
 | Codon Table | 35 | Translation, MT codons, completeness, case handling, edge cases |
 | Exon/Intron Numbers | 25 | Position calculation, formatting |
 | SpliceAI | 12 | Score parsing, cutoffs, thread safety |
-| **Total** | **1014** | |
+| **Total** | **1022** | |
 
 ```bash
 cd build && ./vep_tests

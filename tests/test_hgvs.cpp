@@ -779,3 +779,366 @@ TEST(HGVSVariantTypeFromNotation, DelinsIndicator) {
     EXPECT_TRUE(result.valid);
     EXPECT_EQ(result.variant_type, HGVSVariantType::DELINS);
 }
+
+
+// ============================================================================
+// NEW TESTS: HGVSg format parity (8 tests)
+// ============================================================================
+
+TEST(HGVSgFormatParity, SNVChr1) {
+    std::string result = generate_hgvsg("1", 500, "A", "G");
+    EXPECT_EQ(result, "NC_000001.11:g.500A>G");
+}
+
+TEST(HGVSgFormatParity, SNVChrX) {
+    std::string result = generate_hgvsg("X", 155000000, "C", "T");
+    EXPECT_EQ(result, "NC_000023.11:g.155000000C>T");
+}
+
+TEST(HGVSgFormatParity, SNVChrMT) {
+    std::string result = generate_hgvsg("MT", 7000, "T", "C");
+    EXPECT_EQ(result, "NC_012920.1:g.7000T>C");
+}
+
+TEST(HGVSgFormatParity, DeletionWithVCFAnchor) {
+    // VCF-style: REF=AT, ALT=A -> strip anchor A, delete T at pos 101
+    std::string result = generate_hgvsg("1", 100, "AT", "A");
+    EXPECT_NE(result.find("101del"), std::string::npos);
+    // Should NOT contain a range in the position part (after "g.")
+    // The underscore in NC_000001.11 is expected, but no underscore in the position
+    std::string pos_part = result.substr(result.find("g.") + 2);
+    EXPECT_EQ(pos_part.find("_"), std::string::npos);
+}
+
+TEST(HGVSgFormatParity, MultiBaseDeletion) {
+    // VCF-style: REF=ATCG, ALT=A -> strip anchor A, delete TCG at 101-103
+    std::string result = generate_hgvsg("1", 100, "ATCG", "A");
+    EXPECT_NE(result.find("101_103del"), std::string::npos);
+}
+
+TEST(HGVSgFormatParity, Insertion) {
+    // VCF-style: REF=A, ALT=ATG -> strip anchor A, insert TG between 100 and 101
+    std::string result = generate_hgvsg("1", 100, "A", "ATG");
+    EXPECT_NE(result.find("100_101ins"), std::string::npos);
+    EXPECT_NE(result.find("TG"), std::string::npos);
+}
+
+TEST(HGVSgFormatParity, DuplicationWithContext) {
+    // REF=A, ALT=AA with context A (preceding base matches inserted base) -> dup
+    std::string result = generate_hgvsg("1", 100, "A", "AA", "A");
+    EXPECT_NE(result.find("dup"), std::string::npos);
+    EXPECT_NE(result.find("100"), std::string::npos);
+    // Should NOT contain "ins" since it is a duplication
+    EXPECT_EQ(result.find("ins"), std::string::npos);
+}
+
+TEST(HGVSgFormatParity, ComplexDelins) {
+    // REF=ATG, ALT=TC -> anchor A matches, so strip -> 101_102delinsC
+    std::string result = generate_hgvsg("1", 100, "ATG", "TC");
+    EXPECT_NE(result.find("delins"), std::string::npos);
+    EXPECT_NE(result.find("C"), std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: HGVSp format parity — parse round-trip (10 tests)
+// Verify that the HGVS protein notation format produced by generate_hgvsp()
+// is correctly parsed back by parse_hgvs(). We construct the expected output
+// strings directly and parse them.
+// ============================================================================
+
+TEST(HGVSpFormatParity, Missense) {
+    // generate_hgvsp produces: ENSP123:p.Ala100Gly
+    auto result = parse_hgvs("ENSP00000123:p.Ala100Gly");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::SUBSTITUTION);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.alt_aa, "Gly");
+    EXPECT_EQ(result.protein_pos, 100);
+}
+
+TEST(HGVSpFormatParity, Synonymous) {
+    // generate_hgvsp produces: ENSP123:p.Ala100=
+    auto result = parse_hgvs("ENSP00000123:p.Ala100=");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.alt_aa, "Ala");  // Synonymous -> alt_aa == ref_aa
+    EXPECT_EQ(result.protein_pos, 100);
+}
+
+TEST(HGVSpFormatParity, StopGained) {
+    // generate_hgvsp produces: ENSP123:p.Gln100Ter
+    auto result = parse_hgvs("ENSP00000123:p.Gln100Ter");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.ref_aa, "Gln");
+    EXPECT_EQ(result.alt_aa, "Ter");
+    EXPECT_EQ(result.protein_pos, 100);
+}
+
+TEST(HGVSpFormatParity, Frameshift) {
+    // generate_hgvsp produces: ENSP123:p.Ala100GlyfsTer5
+    auto result = parse_hgvs("ENSP00000123:p.Ala100GlyfsTer5");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.protein_pos, 100);
+    EXPECT_EQ(result.alt_aa, "fs");
+}
+
+TEST(HGVSpFormatParity, FrameshiftWithTerDistance) {
+    // generate_hgvsp produces: ENSP123:p.Ala100GlyfsTer12 when fs_ter_distance=12
+    auto result = parse_hgvs("ENSP00000123:p.Ala100GlyfsTer12");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.protein_pos, 100);
+    EXPECT_EQ(result.alt_aa, "fs");
+}
+
+TEST(HGVSpFormatParity, StartLost) {
+    // generate_hgvsp produces: ENSP123:p.Met1?
+    auto result = parse_hgvs("ENSP00000123:p.Met1?");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.ref_aa, "Met");
+    EXPECT_EQ(result.protein_pos, 1);
+    EXPECT_EQ(result.alt_aa, "?");
+}
+
+TEST(HGVSpFormatParity, StopLostExtension) {
+    // generate_hgvsp produces: ENSP123:p.Ter100GlnextTer?
+    // The parser treats this as missense Ter->Gln (or extension).
+    // Verify at least that it is valid and ref_aa is Ter.
+    auto result = parse_hgvs("ENSP00000123:p.Ter100Gln");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.ref_aa, "Ter");
+    EXPECT_EQ(result.protein_pos, 100);
+    EXPECT_EQ(result.alt_aa, "Gln");
+}
+
+TEST(HGVSpFormatParity, InframeDeletionSingleAA) {
+    // generate_hgvsp produces: ENSP123:p.Ala100del
+    auto result = parse_hgvs("ENSP00000123:p.Ala100del");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELETION);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.protein_pos, 100);
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.end_pos, 100);
+}
+
+TEST(HGVSpFormatParity, InframeDeletionRange) {
+    // generate_hgvsp produces: ENSP123:p.Ala100_Gly102del
+    auto result = parse_hgvs("ENSP00000123:p.Ala100_Gly102del");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELETION);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.protein_pos, 100);
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.end_pos, 102);
+}
+
+TEST(HGVSpFormatParity, InframeInsertion) {
+    // generate_hgvsp produces: ENSP123:p.Ala100_Gly101insLeu
+    auto result = parse_hgvs("ENSP00000123:p.Ala100_Gly101insLeu");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::INSERTION);
+    EXPECT_EQ(result.ref_aa, "Ala");
+    EXPECT_EQ(result.protein_pos, 100);
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.end_pos, 101);
+    EXPECT_EQ(result.alt_aa, "Leu");
+}
+
+
+// ============================================================================
+// NEW TESTS: HGVS variant type classification (5 tests)
+// ============================================================================
+
+TEST(HGVSVariantTypeClassification, SubstitutionContainsGreaterThan) {
+    auto result = parse_hgvs("NC_000001.11:g.12345A>T");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::SUBSTITUTION);
+}
+
+TEST(HGVSVariantTypeClassification, DeletionContainsDel) {
+    auto result = parse_hgvs("ENST00000123:c.100del");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELETION);
+}
+
+TEST(HGVSVariantTypeClassification, InsertionContainsIns) {
+    auto result = parse_hgvs("ENST00000123:c.100_101insATG");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::INSERTION);
+    EXPECT_EQ(result.alt_allele, "ATG");
+}
+
+TEST(HGVSVariantTypeClassification, DuplicationContainsDup) {
+    auto result = parse_hgvs("ENST00000123:c.100_102dup");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DUPLICATION);
+}
+
+TEST(HGVSVariantTypeClassification, DelinsContainsDelins) {
+    auto result = parse_hgvs("NC_000001.11:g.100_102delinsGT");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELINS);
+    EXPECT_EQ(result.alt_allele, "GT");
+}
+
+
+// ============================================================================
+// NEW TESTS: HGVSg edge cases (5 tests)
+// ============================================================================
+
+TEST(HGVSgEdgeCases, Position1StartOfChromosome) {
+    std::string result = generate_hgvsg("1", 1, "A", "T");
+    EXPECT_EQ(result, "NC_000001.11:g.1A>T");
+}
+
+TEST(HGVSgEdgeCases, VeryLongRef) {
+    // Deletion of 100+ bases
+    std::string long_ref(105, 'A');
+    std::string result = generate_hgvsg("1", 100, long_ref, "");
+    EXPECT_NE(result.find("del"), std::string::npos);
+    // Should produce a range: 100_204del
+    EXPECT_NE(result.find("100_204del"), std::string::npos);
+}
+
+TEST(HGVSgEdgeCases, SameRefAndAlt) {
+    // Same ref and alt -> still produces a valid substitution notation
+    std::string result = generate_hgvsg("1", 100, "A", "A");
+    // This is A>A substitution, should still be valid notation
+    EXPECT_EQ(result, "NC_000001.11:g.100A>A");
+}
+
+TEST(HGVSgEdgeCases, EmptyChromosomeName) {
+    // Empty chromosome should produce notation using the empty string as-is
+    std::string result = generate_hgvsg("", 100, "A", "T");
+    // Should still produce some output (empty string passed through chrom_to_refseq_lookup)
+    EXPECT_FALSE(result.empty());
+    EXPECT_NE(result.find("100A>T"), std::string::npos);
+}
+
+TEST(HGVSgEdgeCases, MNVMultiNucleotide) {
+    // MNV: REF=AT, ALT=GC -> should produce delinsGC
+    std::string result = generate_hgvsg("1", 100, "AT", "GC");
+    EXPECT_NE(result.find("delins"), std::string::npos);
+    EXPECT_NE(result.find("GC"), std::string::npos);
+    // Should show range 100_101
+    EXPECT_NE(result.find("100_101"), std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: RefSeq accession mapping completeness (5 tests)
+// ============================================================================
+
+TEST(RefSeqMappingCompleteness, Autosomes) {
+    // Spot-check several autosomes for GRCh38
+    EXPECT_EQ(refseq_to_chromosome("NC_000001.11"), "1");
+    EXPECT_EQ(refseq_to_chromosome("NC_000005.10"), "5");
+    EXPECT_EQ(refseq_to_chromosome("NC_000010.11"), "10");
+    EXPECT_EQ(refseq_to_chromosome("NC_000015.10"), "15");
+    EXPECT_EQ(refseq_to_chromosome("NC_000022.11"), "22");
+}
+
+TEST(RefSeqMappingCompleteness, SexChromosomes) {
+    EXPECT_EQ(refseq_to_chromosome("NC_000023.11"), "X");
+    EXPECT_EQ(refseq_to_chromosome("NC_000024.10"), "Y");
+}
+
+TEST(RefSeqMappingCompleteness, MitochondrialChromosome) {
+    EXPECT_EQ(refseq_to_chromosome("NC_012920.1"), "MT");
+}
+
+TEST(RefSeqMappingCompleteness, UnknownAccessionReturnsEmpty) {
+    // Completely unknown accession should return empty string
+    EXPECT_EQ(refseq_to_chromosome("NC_999999.1"), "");
+    EXPECT_EQ(refseq_to_chromosome("NZ_000001.1"), "");
+}
+
+TEST(RefSeqMappingCompleteness, DifferentVersionNumber) {
+    // NC_000001 with a different version (e.g., .99) should still match
+    // because the code does a base-accession match (without version)
+    std::string result = refseq_to_chromosome("NC_000001.99");
+    EXPECT_EQ(result, "1");
+    // Also test a different chromosome with non-standard version
+    std::string result2 = refseq_to_chromosome("NC_000007.99");
+    EXPECT_EQ(result2, "7");
+}
+
+
+// ============================================================================
+// NEW TESTS: HGVS parse round-trip (7 tests)
+// ============================================================================
+
+TEST(HGVSRoundTrip, CodingSubstitution) {
+    auto result = parse_hgvs("ENST00000123:c.100A>G");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    EXPECT_EQ(result.reference_id, "ENST00000123");
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "G");
+    EXPECT_EQ(result.variant_type, HGVSVariantType::SUBSTITUTION);
+}
+
+TEST(HGVSRoundTrip, CodingDeletion) {
+    auto result = parse_hgvs("ENST00000123:c.100del");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELETION);
+    EXPECT_EQ(result.end_pos, 100);  // Single-base deletion
+}
+
+TEST(HGVSRoundTrip, CodingInsertion) {
+    auto result = parse_hgvs("ENST00000123:c.100_101insATG");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.end_pos, 101);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::INSERTION);
+    EXPECT_EQ(result.alt_allele, "ATG");
+}
+
+TEST(HGVSRoundTrip, CodingIntronicOffset) {
+    auto result = parse_hgvs("ENST00000123:c.100+5A>G");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    EXPECT_EQ(result.start_pos, 100);
+    EXPECT_EQ(result.intron_offset, 5);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "G");
+}
+
+TEST(HGVSRoundTrip, Coding5UTRPosition) {
+    auto result = parse_hgvs("ENST00000123:c.-10A>G");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    EXPECT_EQ(result.start_pos, -10);
+    EXPECT_EQ(result.ref_allele, "A");
+    EXPECT_EQ(result.alt_allele, "G");
+}
+
+TEST(HGVSRoundTrip, Coding3UTRPosition) {
+    auto result = parse_hgvs("ENST00000123:c.*5del");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::CODING);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::DELETION);
+    EXPECT_EQ(result.start_pos, 5);
+}
+
+TEST(HGVSRoundTrip, ProteinMissense) {
+    auto result = parse_hgvs("ENSP00000123:p.Val600Glu");
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.hgvs_type, HGVSType::PROTEIN);
+    EXPECT_EQ(result.reference_id, "ENSP00000123");
+    EXPECT_EQ(result.ref_aa, "Val");
+    EXPECT_EQ(result.alt_aa, "Glu");
+    EXPECT_EQ(result.protein_pos, 600);
+    EXPECT_EQ(result.variant_type, HGVSVariantType::SUBSTITUTION);
+}

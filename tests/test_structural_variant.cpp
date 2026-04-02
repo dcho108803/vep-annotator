@@ -676,3 +676,253 @@ TEST(ParseSVFromVCF, RegularSNV) {
     EXPECT_EQ(sv.sv_type, SVType::SNV);
     EXPECT_FALSE(sv.is_sv());
 }
+
+
+// ============================================================================
+// NEW TESTS: SV range query (3 tests)
+// ============================================================================
+
+TEST(SVRangeQuery, LargeDELFlagsTranscriptsAtStartMiddleEnd) {
+    // A 1000bp deletion spanning a coding transcript
+    Transcript t = make_coding_transcript();  // start=1000, end=5000
+    t.exons.push_back({1200, 1400, 1, 0});  // exon 1 (near start)
+    t.exons.push_back({3000, 3200, 2, 0});  // exon 2 (middle)
+    t.exons.push_back({4600, 4800, 3, 0});  // exon 3 (near end)
+
+    // DEL overlapping start of transcript
+    StructuralVariant sv_start;
+    sv_start.sv_type = SVType::DEL;
+    sv_start.start = 900;
+    sv_start.end = 1300;
+    sv_start.sv_len = -400;
+    auto cons_start = get_sv_consequences(sv_start, t);
+    ASSERT_FALSE(cons_start.empty());
+    // Should overlap the transcript (and first exon)
+    EXPECT_TRUE(sv_start.overlaps(t.start, t.end));
+
+    // DEL overlapping middle of transcript
+    StructuralVariant sv_mid;
+    sv_mid.sv_type = SVType::DEL;
+    sv_mid.start = 3000;
+    sv_mid.end = 3200;
+    sv_mid.sv_len = -200;
+    auto cons_mid = get_sv_consequences(sv_mid, t);
+    ASSERT_FALSE(cons_mid.empty());
+    EXPECT_TRUE(sv_mid.overlaps(t.start, t.end));
+
+    // DEL overlapping end of transcript
+    StructuralVariant sv_end;
+    sv_end.sv_type = SVType::DEL;
+    sv_end.start = 4700;
+    sv_end.end = 5100;
+    sv_end.sv_len = -400;
+    auto cons_end = get_sv_consequences(sv_end, t);
+    ASSERT_FALSE(cons_end.empty());
+    EXPECT_TRUE(sv_end.overlaps(t.start, t.end));
+}
+
+TEST(SVRangeQuery, DUPSpanningMultipleGenes) {
+    // Two transcripts, DUP spans both
+    Transcript t1;
+    t1.id = "ENST00000001";
+    t1.chromosome = "chr1";
+    t1.start = 1000;
+    t1.end = 3000;
+    t1.strand = '+';
+    t1.cds_start = 1200;
+    t1.cds_end = 2800;
+    t1.biotype = "protein_coding";
+
+    Transcript t2;
+    t2.id = "ENST00000002";
+    t2.chromosome = "chr1";
+    t2.start = 4000;
+    t2.end = 6000;
+    t2.strand = '+';
+    t2.cds_start = 4200;
+    t2.cds_end = 5800;
+    t2.biotype = "protein_coding";
+
+    StructuralVariant sv;
+    sv.sv_type = SVType::DUP;
+    sv.start = 500;
+    sv.end = 7000;
+    sv.sv_len = 6500;
+
+    // DUP contains both transcripts entirely => amplification for each
+    auto cons1 = get_sv_consequences(sv, t1);
+    ASSERT_EQ(cons1.size(), 1u);
+    EXPECT_EQ(cons1[0], ConsequenceType::TRANSCRIPT_AMPLIFICATION);
+
+    auto cons2 = get_sv_consequences(sv, t2);
+    ASSERT_EQ(cons2.size(), 1u);
+    EXPECT_EQ(cons2[0], ConsequenceType::TRANSCRIPT_AMPLIFICATION);
+}
+
+TEST(SVRangeQuery, INVAffectingMiddleExonsOnly) {
+    Transcript t = make_coding_transcript();  // start=1000, end=5000
+    t.exons.push_back({1200, 1400, 1, 0});
+    t.exons.push_back({2500, 2700, 2, 0});
+    t.exons.push_back({4600, 4800, 3, 0});
+    t.cds_regions.push_back({1200, 1400});
+    t.cds_regions.push_back({2500, 2700});
+    t.cds_regions.push_back({4600, 4800});
+
+    // INV affecting only the middle exon area
+    StructuralVariant sv;
+    sv.sv_type = SVType::INV;
+    sv.start = 2400;
+    sv.end = 2800;
+    sv.sv_len = 400;
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_FALSE(cons.empty());
+    // INV overlapping CDS should produce coding_sequence_variant
+    bool has_coding_csq = false;
+    for (const auto& c : cons) {
+        if (c == ConsequenceType::CODING_SEQUENCE_VARIANT) has_coding_csq = true;
+    }
+    EXPECT_TRUE(has_coding_csq);
+}
+
+
+// ============================================================================
+// NEW TESTS: CNV handling (3 tests)
+// ============================================================================
+
+TEST(CNVHandling, CN0HomozygousDeletionTreatedAsDEL) {
+    // CN0 = 0 copies, should be treated like a deletion
+    Transcript t = make_coding_transcript();
+    t.cds_regions.push_back({1200, 1400});
+    t.exons.push_back({1200, 1400, 1, 0});
+
+    std::map<std::string, std::string> info = {{"END", "5100"}};
+    auto sv = parse_sv_from_vcf("chr1", 900, "N", "<CN0>", info);
+    EXPECT_EQ(sv.sv_type, SVType::CNV);
+    EXPECT_EQ(sv.copy_number, 0);
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_FALSE(cons.empty());
+    // CN0 containing entire transcript should produce transcript_ablation
+    EXPECT_EQ(cons[0], ConsequenceType::TRANSCRIPT_ABLATION);
+}
+
+TEST(CNVHandling, CN1Hemizygous) {
+    // CN1 = 1 copy (hemizygous deletion on diploid)
+    std::map<std::string, std::string> info = {{"END", "2000"}};
+    auto sv = parse_sv_from_vcf("chr1", 1000, "N", "<CN1>", info);
+    EXPECT_EQ(sv.sv_type, SVType::CNV);
+    EXPECT_EQ(sv.copy_number, 1);
+    EXPECT_TRUE(sv.is_sv());
+    // CN1 is not 0, and not > 2, so no special DEL/DUP treatment by default
+    // but it's still a valid CNV
+    EXPECT_EQ(sv.start, 1000);
+    EXPECT_EQ(sv.end, 2000);
+}
+
+TEST(CNVHandling, CN3PlusAmplificationTreatedAsDUP) {
+    // CN3+ = amplification, should be treated like a duplication
+    Transcript t = make_coding_transcript();
+    t.cds_regions.push_back({1200, 1400});
+    t.exons.push_back({1200, 1400, 1, 0});
+
+    std::map<std::string, std::string> info = {{"END", "1500"}};
+    auto sv = parse_sv_from_vcf("chr1", 1100, "N", "<CN3>", info);
+    EXPECT_EQ(sv.sv_type, SVType::CNV);
+    EXPECT_EQ(sv.copy_number, 3);
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_FALSE(cons.empty());
+    // CN3 overlapping CDS => coding_sequence_variant (amplification path)
+    bool has_coding = false;
+    for (const auto& c : cons) {
+        if (c == ConsequenceType::CODING_SEQUENCE_VARIANT) has_coding = true;
+    }
+    EXPECT_TRUE(has_coding);
+}
+
+
+// ============================================================================
+// NEW TESTS: SV consequence completeness (4 tests)
+// ============================================================================
+
+TEST(SVConsequenceCompleteness, DELContainingEntireTranscript) {
+    Transcript t = make_coding_transcript();  // start=1000, end=5000
+
+    StructuralVariant sv;
+    sv.sv_type = SVType::DEL;
+    sv.start = 500;   // before transcript start
+    sv.end = 6000;    // after transcript end
+    sv.sv_len = -5500;
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::TRANSCRIPT_ABLATION);
+}
+
+TEST(SVConsequenceCompleteness, DUPContainingEntireTranscript) {
+    Transcript t = make_coding_transcript();  // start=1000, end=5000
+
+    StructuralVariant sv;
+    sv.sv_type = SVType::DUP;
+    sv.start = 500;
+    sv.end = 6000;
+    sv.sv_len = 5500;
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::TRANSCRIPT_AMPLIFICATION);
+}
+
+TEST(SVConsequenceCompleteness, DELPartialOverlapProducesFeatureEffects) {
+    Transcript t = make_coding_transcript();  // start=1000, end=5000
+    t.exons.push_back({1200, 1400, 1, 0});
+    t.exons.push_back({3000, 3200, 2, 0});
+    t.cds_regions.push_back({1200, 1400});
+    t.cds_regions.push_back({3000, 3200});
+
+    // DEL partially overlapping the transcript, affecting CDS
+    StructuralVariant sv;
+    sv.sv_type = SVType::DEL;
+    sv.start = 1100;
+    sv.end = 1500;
+    sv.sv_len = -400;
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_FALSE(cons.empty());
+    // Partial DEL should produce feature_truncation and/or coding effects
+    bool has_truncation = false;
+    bool has_coding_effect = false;
+    for (const auto& c : cons) {
+        if (c == ConsequenceType::FEATURE_TRUNCATION) has_truncation = true;
+        if (c == ConsequenceType::FRAMESHIFT_VARIANT ||
+            c == ConsequenceType::INFRAME_DELETION ||
+            c == ConsequenceType::CODING_SEQUENCE_VARIANT) has_coding_effect = true;
+    }
+    // Should have either truncation or coding effects (or both)
+    EXPECT_TRUE(has_truncation || has_coding_effect);
+}
+
+TEST(SVConsequenceCompleteness, SVInIntronOnlyIntronVariant) {
+    Transcript t = make_coding_transcript();  // start=1000, end=5000
+    t.exons.push_back({1200, 1400, 1, 0});
+    t.exons.push_back({3000, 3200, 2, 0});
+    t.cds_regions.push_back({1200, 1400});
+    t.cds_regions.push_back({3000, 3200});
+
+    // Small INV entirely within the intron between exons (1400..3000)
+    StructuralVariant sv;
+    sv.sv_type = SVType::INV;
+    sv.start = 2000;
+    sv.end = 2100;
+    sv.sv_len = 100;
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_FALSE(cons.empty());
+    // Should be intron_variant since it doesn't overlap any exons or CDS
+    bool has_intron = false;
+    for (const auto& c : cons) {
+        if (c == ConsequenceType::INTRON_VARIANT) has_intron = true;
+    }
+    EXPECT_TRUE(has_intron);
+}

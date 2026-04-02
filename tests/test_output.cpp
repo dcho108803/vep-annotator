@@ -3052,3 +3052,396 @@ TEST(OutputFormatParsing, UnknownDefaultsToTSV) {
     EXPECT_EQ(parse_output_format("csv"), OutputFormat::TSV);
     EXPECT_EQ(parse_output_format(""), OutputFormat::TSV);
 }
+
+
+// ============================================================================
+// NEW TESTS: NDJSON format verification (5 tests)
+// ============================================================================
+
+TEST(NDJSONFormat, EmptyOutputProducesEmptyString) {
+    TempFile tmp(".json");
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // NDJSON: empty output is empty string, no brackets
+    EXPECT_TRUE(content.empty());
+    EXPECT_EQ(content.find('['), std::string::npos);
+    EXPECT_EQ(content.find(']'), std::string::npos);
+}
+
+TEST(NDJSONFormat, SingleVariantSingleLine) {
+    TempFile tmp(".json");
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+    VariantAnnotation ann = make_basic_annotation();
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Single variant: one line of JSON ending with newline
+    ASSERT_FALSE(content.empty());
+    EXPECT_EQ(content.back(), '\n');
+    // Remove trailing newline, no more newlines inside
+    std::string trimmed = content.substr(0, content.size() - 1);
+    EXPECT_EQ(trimmed.find('\n'), std::string::npos);
+}
+
+TEST(NDJSONFormat, TwoVariantsTwoLines) {
+    TempFile tmp(".json");
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+
+    VariantAnnotation ann1 = make_basic_annotation();
+    VariantAnnotation ann2 = make_basic_annotation();
+    ann2.chromosome = "chr1";
+    ann2.position = 200;
+    ann2.ref_allele = "G";
+    ann2.alt_allele = "A";
+
+    writer.write_annotation(ann1, {});
+    writer.write_annotation(ann2, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Two variants: two lines, newline-separated, no commas between them
+    int newline_count = 0;
+    for (char c : content) {
+        if (c == '\n') newline_count++;
+    }
+    EXPECT_EQ(newline_count, 2);  // each line ends with \n
+    // No comma-newline between objects (NDJSON, not JSON array)
+    EXPECT_EQ(content.find(",\n{"), std::string::npos);
+    // Should have }\n{ pattern (newline between objects, no comma)
+    EXPECT_NE(content.find("}\n{"), std::string::npos);
+}
+
+TEST(NDJSONFormat, EachLineValidJSON) {
+    TempFile tmp(".json");
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+
+    VariantAnnotation ann = make_basic_annotation();
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Each line should start with { and end with }
+    std::string trimmed = content.substr(0, content.size() - 1);  // remove trailing \n
+    EXPECT_EQ(trimmed.front(), '{');
+    EXPECT_EQ(trimmed.back(), '}');
+    // No trailing comma (which would make JSON invalid)
+    EXPECT_NE(trimmed[trimmed.size() - 1], ',');
+    // Verify no ",}" pattern (trailing comma before closing brace)
+    EXPECT_EQ(trimmed.find(",}"), std::string::npos);
+    EXPECT_EQ(trimmed.find(",]"), std::string::npos);
+}
+
+TEST(NDJSONFormat, CompactNoSpaces) {
+    TempFile tmp(".json");
+    JSONWriter writer(tmp.path());
+    writer.write_header({});
+
+    VariantAnnotation ann = make_basic_annotation();
+    writer.write_annotation(ann, {});
+    writer.write_footer();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Compact NDJSON: no spaces after colons or commas (outside strings)
+    // Check key-value pairs have no space after colon
+    EXPECT_NE(content.find("\"start\":7675088"), std::string::npos);
+    EXPECT_NE(content.find("\"strand\":1"), std::string::npos);
+    // No " : " pattern (space around colon outside strings)
+    // Verify no newlines in the output (compact single-line)
+    std::string trimmed = content.substr(0, content.size() - 1);
+    EXPECT_EQ(trimmed.find('\n'), std::string::npos);
+    EXPECT_EQ(trimmed.find('\t'), std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: VCF CSQ SYMBOL_SOURCE and HGNC_ID (4 tests)
+// ============================================================================
+
+TEST(VCFCSQFields, HeaderContainsSymbolSourceAndHGNC) {
+    TempFile tmp(".vcf");
+    VCFWriter writer(tmp.path());
+    writer.write_header({});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Default CSQ format must include SYMBOL_SOURCE and HGNC_ID
+    EXPECT_NE(content.find("SYMBOL_SOURCE"), std::string::npos);
+    EXPECT_NE(content.find("HGNC_ID"), std::string::npos);
+}
+
+TEST(VCFCSQFields, CSQOutputIncludesSymbolSource) {
+    TempFile tmp(".vcf");
+    VCFWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["SYMBOL_SOURCE"] = "HGNC";
+    writer.write_annotation(ann, {});
+    writer.flush_variant();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // SYMBOL_SOURCE value should appear in CSQ output
+    EXPECT_NE(content.find("HGNC"), std::string::npos);
+}
+
+TEST(VCFCSQFields, CSQOutputIncludesHGNCId) {
+    TempFile tmp(".vcf");
+    VCFWriter writer(tmp.path());
+    writer.set_skip_header(true);
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.custom_annotations["HGNC_ID"] = "HGNC:11998";
+    writer.write_annotation(ann, {});
+    writer.flush_variant();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // HGNC_ID value should appear in CSQ output (colon is not escaped by VCF escaping)
+    EXPECT_NE(content.find("HGNC:11998"), std::string::npos);
+}
+
+TEST(VCFCSQFields, CSQDescriptionSaysEnsemblVEP) {
+    TempFile tmp(".vcf");
+    VCFWriter writer(tmp.path());
+    writer.write_header({});
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // Description should say "Ensembl VEP" not just "VEP"
+    EXPECT_NE(content.find("Consequence annotations from Ensembl VEP"), std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: VCF escape & character (3 tests)
+// ============================================================================
+
+TEST(VCFEscapeAmpersand, AmpersandEncoded) {
+    TempFile tmp(".vcf");
+    VCFWriter writer(tmp.path());
+    writer.set_skip_header(true);
+    writer.set_field_order({"Allele", "SYMBOL"});
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.gene_symbol = "a&b";
+    writer.write_annotation(ann, {});
+    writer.flush_variant();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("a%26b"), std::string::npos);
+    EXPECT_EQ(content.find("a&b"), std::string::npos);
+}
+
+TEST(VCFEscapeAmpersand, MultipleSpecialChars) {
+    TempFile tmp(".vcf");
+    VCFWriter writer(tmp.path());
+    writer.set_skip_header(true);
+    writer.set_field_order({"Allele", "Existing_variation"});
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.existing_variation = "a|b&c;d";
+    writer.write_annotation(ann, {});
+    writer.flush_variant();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    // | -> %7C, & -> %26, ; -> %3B
+    EXPECT_NE(content.find("a%7Cb%26c%3Bd"), std::string::npos);
+}
+
+TEST(VCFEscapeAmpersand, NormalStringUnchanged) {
+    TempFile tmp(".vcf");
+    VCFWriter writer(tmp.path());
+    writer.set_skip_header(true);
+    writer.set_field_order({"Allele", "SYMBOL"});
+
+    VariantAnnotation ann = make_basic_annotation();
+    ann.gene_symbol = "normal";
+    writer.write_annotation(ann, {});
+    writer.flush_variant();
+    writer.close();
+
+    std::string content = read_file(tmp.path());
+    EXPECT_NE(content.find("normal"), std::string::npos);
+    // No percent-encoding in "normal"
+    EXPECT_EQ(content.find("%"), std::string::npos);
+}
+
+
+// ============================================================================
+// NEW TESTS: --most_severe output format (4 tests)
+// ============================================================================
+
+// Need transcript_filter.hpp for TranscriptFilter and TranscriptFilterConfig
+#include "transcript_filter.hpp"
+
+TEST(MostSevereOutput, ResultHasOneAnnotation) {
+    TranscriptFilterConfig config;
+    config.most_severe = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann1 = make_basic_annotation();
+    ann1.consequences = {ConsequenceType::MISSENSE_VARIANT};
+    VariantAnnotation ann2 = make_basic_annotation();
+    ann2.consequences = {ConsequenceType::SYNONYMOUS_VARIANT};
+    ann2.transcript_id = "ENST00000445888";
+    anns.push_back(ann1);
+    anns.push_back(ann2);
+
+    auto result = filter.filter(anns);
+    EXPECT_EQ(result.size(), 1u);
+}
+
+TEST(MostSevereOutput, ResultHasMostSevereConsequence) {
+    TranscriptFilterConfig config;
+    config.most_severe = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann1 = make_basic_annotation();
+    ann1.consequences = {ConsequenceType::SYNONYMOUS_VARIANT};
+    VariantAnnotation ann2 = make_basic_annotation();
+    ann2.consequences = {ConsequenceType::STOP_GAINED};
+    ann2.transcript_id = "ENST00000445888";
+    anns.push_back(ann1);
+    anns.push_back(ann2);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    ASSERT_EQ(result[0].consequences.size(), 1u);
+    EXPECT_EQ(result[0].consequences[0], ConsequenceType::STOP_GAINED);
+}
+
+TEST(MostSevereOutput, NoGeneTranscriptDetails) {
+    TranscriptFilterConfig config;
+    config.most_severe = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann1 = make_basic_annotation();
+    anns.push_back(ann1);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    // gene_id, transcript_id should be empty (no transcript-level details)
+    EXPECT_TRUE(result[0].gene_id.empty());
+    EXPECT_TRUE(result[0].transcript_id.empty());
+    // feature_type is set to "-" (the most_severe sentinel)
+    EXPECT_EQ(result[0].feature_type, "-");
+}
+
+TEST(MostSevereOutput, PreservesVariantLevelInfo) {
+    TranscriptFilterConfig config;
+    config.most_severe = true;
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann1 = make_basic_annotation();
+    anns.push_back(ann1);
+
+    auto result = filter.filter(anns);
+    ASSERT_EQ(result.size(), 1u);
+    // Variant-level fields are preserved
+    EXPECT_EQ(result[0].chromosome, "chr17");
+    EXPECT_EQ(result[0].position, 7675088);
+    EXPECT_EQ(result[0].ref_allele, "C");
+    EXPECT_EQ(result[0].alt_allele, "T");
+}
+
+
+// ============================================================================
+// NEW TESTS: --exclude_consequences checks all (4 tests)
+// ============================================================================
+
+TEST(ExcludeConsequences, ExcludedWhenAnyMatches) {
+    TranscriptFilterConfig config;
+    config.exclude_consequences.insert("splice_region_variant");
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann;
+    ann.chromosome = "chr1";
+    ann.position = 100;
+    ann.ref_allele = "A";
+    ann.alt_allele = "G";
+    ann.consequences = {ConsequenceType::MISSENSE_VARIANT, ConsequenceType::SPLICE_REGION_VARIANT};
+    ann.impact = Impact::MODERATE;
+    anns.push_back(ann);
+
+    auto result = filter.filter(anns);
+    // Should be excluded because splice_region_variant is in the exclude set
+    EXPECT_TRUE(result.empty());
+}
+
+TEST(ExcludeConsequences, NotExcludedWhenNoMatch) {
+    TranscriptFilterConfig config;
+    config.exclude_consequences.insert("splice_region_variant");
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann;
+    ann.chromosome = "chr1";
+    ann.position = 100;
+    ann.ref_allele = "A";
+    ann.alt_allele = "G";
+    ann.consequences = {ConsequenceType::MISSENSE_VARIANT};
+    ann.impact = Impact::MODERATE;
+    anns.push_back(ann);
+
+    auto result = filter.filter(anns);
+    // Should NOT be excluded (missense_variant is not in the exclude set)
+    EXPECT_EQ(result.size(), 1u);
+}
+
+TEST(ExcludeConsequences, IntronVariantExcluded) {
+    TranscriptFilterConfig config;
+    config.exclude_consequences.insert("intron_variant");
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann;
+    ann.chromosome = "chr1";
+    ann.position = 100;
+    ann.ref_allele = "A";
+    ann.alt_allele = "G";
+    ann.consequences = {ConsequenceType::INTRON_VARIANT};
+    ann.impact = Impact::MODIFIER;
+    anns.push_back(ann);
+
+    auto result = filter.filter(anns);
+    EXPECT_TRUE(result.empty());
+}
+
+TEST(ExcludeConsequences, EmptyExcludeSetNothingExcluded) {
+    TranscriptFilterConfig config;
+    // exclude_consequences is empty by default
+    TranscriptFilter filter(config);
+
+    std::vector<VariantAnnotation> anns;
+    VariantAnnotation ann;
+    ann.chromosome = "chr1";
+    ann.position = 100;
+    ann.ref_allele = "A";
+    ann.alt_allele = "G";
+    ann.consequences = {ConsequenceType::INTRON_VARIANT};
+    ann.impact = Impact::MODIFIER;
+    anns.push_back(ann);
+
+    auto result = filter.filter(anns);
+    EXPECT_EQ(result.size(), 1u);
+}

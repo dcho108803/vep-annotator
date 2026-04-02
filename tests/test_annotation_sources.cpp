@@ -904,3 +904,374 @@ TEST(DomainSource, DomainSourceFieldLists) {
     EXPECT_TRUE(field_set.count("pfam:domain_name"));
     EXPECT_TRUE(field_set.count("pfam:domain_count"));
 }
+
+// ============================================================================
+// Test Suite: dbNSFP source metadata and transcript matching
+// ============================================================================
+
+TEST(DbNSFPSource, SourceNameAndType) {
+    auto source = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    EXPECT_EQ(source->name(), "dbnsfp");
+    EXPECT_EQ(source->type(), "pathogenicity");
+}
+
+TEST(DbNSFPSource, DescriptionNonEmpty) {
+    auto source = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    EXPECT_FALSE(source->description().empty());
+}
+
+TEST(DbNSFPSource, GetFieldsReturnsNonEmpty) {
+    auto source = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    auto fields = source->get_fields();
+    EXPECT_FALSE(fields.empty());
+    // Essential preset should have SIFT, PolyPhen2, CADD, REVEL, AlphaMissense
+    EXPECT_GE(fields.size(), 4u);
+}
+
+TEST(DbNSFPSource, IsThreadSafeFalse) {
+    // dbNSFP uses tabix file handles which are not thread-safe
+    auto source = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    EXPECT_FALSE(source->is_thread_safe());
+}
+
+TEST(DbNSFPSource, GetFieldsPrefixedWithDbnsfp) {
+    auto source = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    auto fields = source->get_fields();
+    for (const auto& f : fields) {
+        EXPECT_EQ(f.substr(0, 7), "dbnsfp:");
+    }
+}
+
+TEST(DbNSFPSource, PathogenicityPresetHasMoreFields) {
+    auto essential = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    auto pathogenicity = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "pathogenicity");
+    EXPECT_GT(pathogenicity->get_fields().size(), essential->get_fields().size());
+}
+
+TEST(DbNSFPSource, AllPresetHasMostFields) {
+    auto essential = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    auto pathogenicity = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "pathogenicity");
+    auto all = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "all");
+    EXPECT_GT(all->get_fields().size(), pathogenicity->get_fields().size());
+    EXPECT_GT(all->get_fields().size(), essential->get_fields().size());
+}
+
+TEST(DbNSFPSource, EssentialPresetContainsKeyScores) {
+    auto source = create_dbnsfp_source("/nonexistent/dbnsfp.txt.gz", "essential");
+    auto fields = source->get_fields();
+    std::set<std::string> field_set(fields.begin(), fields.end());
+    EXPECT_TRUE(field_set.count("dbnsfp:SIFT_score"));
+    EXPECT_TRUE(field_set.count("dbnsfp:CADD_phred"));
+    EXPECT_TRUE(field_set.count("dbnsfp:REVEL_score"));
+}
+
+// ============================================================================
+// Test Suite: dbNSFP field presets (extended)
+// ============================================================================
+
+TEST(DbNSFPFieldPresets, ConservationPresetContainsPhyloP) {
+    auto fields = get_dbnsfp_preset("conservation");
+    std::set<std::string> names;
+    for (const auto& f : fields) names.insert(f.name);
+    bool has_phylop = false;
+    for (const auto& n : names) {
+        if (n.find("phyloP") != std::string::npos) { has_phylop = true; break; }
+    }
+    EXPECT_TRUE(has_phylop);
+}
+
+TEST(DbNSFPFieldPresets, ConservationPresetContainsPhastCons) {
+    auto fields = get_dbnsfp_preset("conservation");
+    std::set<std::string> names;
+    for (const auto& f : fields) names.insert(f.name);
+    bool has_phastcons = false;
+    for (const auto& n : names) {
+        if (n.find("phastCons") != std::string::npos) { has_phastcons = true; break; }
+    }
+    EXPECT_TRUE(has_phastcons);
+}
+
+TEST(DbNSFPFieldPresets, ConservationPresetContainsGERP) {
+    auto fields = get_dbnsfp_preset("conservation");
+    std::set<std::string> names;
+    for (const auto& f : fields) names.insert(f.name);
+    bool has_gerp = false;
+    for (const auto& n : names) {
+        if (n.find("GERP") != std::string::npos) { has_gerp = true; break; }
+    }
+    EXPECT_TRUE(has_gerp);
+}
+
+TEST(DbNSFPFieldPresets, PathogenicityPresetLargerThanEssential) {
+    auto essential = get_dbnsfp_preset("essential");
+    auto pathogenicity = get_dbnsfp_preset("pathogenicity");
+    EXPECT_GT(pathogenicity.size(), essential.size());
+}
+
+TEST(DbNSFPFieldPresets, AllPresetIsLargest) {
+    auto essential = get_dbnsfp_preset("essential");
+    auto pathogenicity = get_dbnsfp_preset("pathogenicity");
+    auto conservation = get_dbnsfp_preset("conservation");
+    auto all = get_all_dbnsfp_fields();
+    EXPECT_GT(all.size(), essential.size());
+    EXPECT_GT(all.size(), pathogenicity.size());
+    EXPECT_GT(all.size(), conservation.size());
+}
+
+TEST(DbNSFPFieldPresets, CADDPhredThresholdIs20) {
+    const DbNSFPField* cadd = nullptr;
+    for (const auto& f : DBNSFP_PATHOGENICITY_FIELDS) {
+        if (f.name == "CADD_phred") { cadd = &f; break; }
+    }
+    ASSERT_NE(cadd, nullptr);
+    EXPECT_DOUBLE_EQ(cadd->damaging_threshold, 20.0);
+    EXPECT_TRUE(cadd->higher_is_damaging);
+    EXPECT_TRUE(cadd->is_score);
+}
+
+TEST(DbNSFPFieldPresets, REVELScoreThresholdIs05) {
+    const DbNSFPField* revel = nullptr;
+    for (const auto& f : DBNSFP_PATHOGENICITY_FIELDS) {
+        if (f.name == "REVEL_score") { revel = &f; break; }
+    }
+    ASSERT_NE(revel, nullptr);
+    EXPECT_DOUBLE_EQ(revel->damaging_threshold, 0.5);
+    EXPECT_TRUE(revel->higher_is_damaging);
+    EXPECT_TRUE(revel->is_score);
+}
+
+// ============================================================================
+// Test Suite: LOFTEE consequence-type gate
+// ============================================================================
+
+TEST(LOFTEEConsequenceGate, MissenseVariantNotClassified) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "missense_variant";
+    // Variant in exon 2 CDS
+    source->annotate("1", 2100, "A", "T", &t, annotations);
+    // missense_variant is not a LoF consequence -> should NOT classify
+    EXPECT_EQ(annotations.find("loftee:classification"), annotations.end());
+}
+
+TEST(LOFTEEConsequenceGate, StopGainedClassified) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "stop_gained";
+    // Variant in exon 2 CDS (not last exon)
+    source->annotate("1", 2100, "A", "T", &t, annotations);
+    // stop_gained is a LoF consequence -> should classify
+    EXPECT_NE(annotations.find("loftee:classification"), annotations.end());
+}
+
+TEST(LOFTEEConsequenceGate, FrameshiftVariantClassified) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "frameshift_variant";
+    source->annotate("1", 2100, "A", "T", &t, annotations);
+    EXPECT_NE(annotations.find("loftee:classification"), annotations.end());
+}
+
+TEST(LOFTEEConsequenceGate, SpliceDonorClassified) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "splice_donor_variant";
+    // Variant at splice donor site (2bp after exon 1 end: 1201)
+    source->annotate("1", 1201, "G", "A", &t, annotations);
+    EXPECT_NE(annotations.find("loftee:classification"), annotations.end());
+}
+
+TEST(LOFTEEConsequenceGate, SpliceAcceptorClassified) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "splice_acceptor_variant";
+    // Variant at splice acceptor site (2bp before exon 2 start: 1999)
+    source->annotate("1", 1999, "C", "T", &t, annotations);
+    EXPECT_NE(annotations.find("loftee:classification"), annotations.end());
+}
+
+TEST(LOFTEEConsequenceGate, SynonymousVariantNotClassified) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "synonymous_variant";
+    source->annotate("1", 2100, "A", "T", &t, annotations);
+    // synonymous_variant is not a LoF consequence -> should NOT classify
+    EXPECT_EQ(annotations.find("loftee:classification"), annotations.end());
+}
+
+// ============================================================================
+// Test Suite: LOFTEE flag combinations (extended)
+// ============================================================================
+
+TEST(LOFTEEFlags, HCWithNoFlagsConfidence) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "stop_gained";
+    // Variant in exon 2 CDS (not last exon, multi-exon, protein_coding, valid CDS)
+    source->annotate("1", 2100, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["loftee:classification"], "HC");
+    // HC confidence = 0.9, no flags to reduce it
+    double conf = std::stod(annotations["loftee:confidence"]);
+    EXPECT_NEAR(conf, 0.9, 0.01);
+    // No flags key should exist
+    EXPECT_EQ(annotations.find("loftee:flags"), annotations.end());
+}
+
+TEST(LOFTEEFlags, LCWithEndTruncHasFlag) {
+    auto source = create_loftee_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "stop_gained";
+    // Variant in last exon CDS (exon 3: 3000-3500, CDS: 3000-3400)
+    source->annotate("1", 3100, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    EXPECT_NE(annotations["loftee:flags"].find("END_TRUNC"), std::string::npos);
+}
+
+TEST(LOFTEEFlags, LCWithSingleExonHasFlag) {
+    auto source = create_loftee_source();
+    auto t = make_single_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "stop_gained";
+    source->annotate("1", 1500, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    EXPECT_NE(annotations["loftee:flags"].find("SINGLE_EXON"), std::string::npos);
+}
+
+TEST(LOFTEEFlags, LCWithIncompleteCDS) {
+    auto source = create_loftee_source();
+    auto t = make_incomplete_cds_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "stop_gained";
+    source->annotate("1", 2100, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    EXPECT_NE(annotations["loftee:flags"].find("INCOMPLETE_CDS"), std::string::npos);
+}
+
+TEST(LOFTEEFlags, MultipleFlagsDecreaseConfidence) {
+    auto source = create_loftee_source();
+    // Use incomplete CDS transcript - variant in last exon triggers both
+    // INCOMPLETE_CDS and END_TRUNC flags
+    auto t = make_incomplete_cds_transcript();
+    // Put variant in last exon CDS (exon 3: 3000-3400)
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "stop_gained";
+    source->annotate("1", 3100, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["loftee:classification"], "LC");
+    // Should have at least 2 flags: INCOMPLETE_CDS + END_TRUNC
+    auto flags = annotations["loftee:flags"];
+    int flag_count = 1;
+    for (char c : flags) { if (c == ',') flag_count++; }
+    EXPECT_GE(flag_count, 2);
+    // Confidence: 0.5 - n*0.1, with n>=2, should be <= 0.3
+    double conf = std::stod(annotations["loftee:confidence"]);
+    EXPECT_LE(conf, 0.3 + 0.01);
+}
+
+TEST(LOFTEEFlags, SmallIntronBoundary15bpNoFlag) {
+    // 15bp intron should NOT trigger SMALL_INTRON
+    auto source = create_loftee_source();
+    Transcript t;
+    t.id = "ENST_15BP";
+    t.gene_id = "ENSG_15BP";
+    t.gene_name = "INTRON15";
+    t.chromosome = "1";
+    t.start = 1000;
+    t.end = 5000;
+    t.strand = '+';
+    t.biotype = "protein_coding";
+    t.protein_id = "ENSP_15BP";
+
+    // Exon 1: 1000-1200, Exon 2: 1216-1500 (intron = 1216 - 1200 - 1 = 15bp, NOT < 15)
+    // Exon 3: 3000-3500
+    Exon e1; e1.start = 1000; e1.end = 1200; e1.exon_number = 1; e1.phase = 0;
+    Exon e2; e2.start = 1216; e2.end = 1500; e2.exon_number = 2; e2.phase = 0;
+    Exon e3; e3.start = 3000; e3.end = 3500; e3.exon_number = 3; e3.phase = 0;
+    t.exons = {e1, e2, e3};
+
+    CDS c1; c1.start = 1050; c1.end = 1200; c1.phase = 0;
+    CDS c2; c2.start = 1216; c2.end = 1500; c2.phase = 0;
+    CDS c3; c3.start = 3000; c3.end = 3400; c3.phase = 0;
+    t.cds_regions = {c1, c2, c3};
+    t.cds_start = 1050;
+    t.cds_end = 3400;
+
+    std::unordered_map<std::string, std::string> annotations;
+    annotations["_consequences"] = "frameshift_variant";
+    source->annotate("1", 1300, "A", "T", &t, annotations);
+
+    EXPECT_EQ(annotations["loftee:classification"], "HC");
+    auto flags_it = annotations.find("loftee:flags");
+    if (flags_it != annotations.end()) {
+        EXPECT_EQ(flags_it->second.find("SMALL_INTRON"), std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test Suite: NMD prediction (extended)
+// ============================================================================
+
+TEST(NMDExtended, VariantInFirstExonIsSusceptible) {
+    auto source = create_nmd_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    // Variant early in first exon CDS (pos 1060, CDS starts at 1050)
+    // Far upstream of last exon-exon junction -> NMD susceptible
+    source->annotate("1", 1060, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["nmd:susceptible"], "true");
+    EXPECT_EQ(annotations["nmd:reason"], "ptc_upstream_of_last_junction");
+}
+
+TEST(NMDExtended, VariantInLastExonIsEscape) {
+    auto source = create_nmd_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    // Variant in last exon CDS (exon 3: 3000-3400)
+    source->annotate("1", 3200, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["nmd:susceptible"], "false");
+}
+
+TEST(NMDExtended, SingleExonTranscriptIsEscape) {
+    auto source = create_nmd_source();
+    auto t = make_single_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    source->annotate("1", 1500, "A", "T", &t, annotations);
+    EXPECT_EQ(annotations["nmd:susceptible"], "false");
+    EXPECT_EQ(annotations["nmd:reason"], "single_exon_gene");
+}
+
+TEST(NMDExtended, NonCodingTranscriptNotAnnotated) {
+    auto source = create_nmd_source();
+    auto t = make_noncoding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    source->annotate("1", 1200, "A", "T", &t, annotations);
+    // Non-coding transcript: no NMD annotations at all
+    EXPECT_EQ(annotations.find("nmd:susceptible"), annotations.end());
+    EXPECT_EQ(annotations.find("nmd:reason"), annotations.end());
+}
+
+TEST(NMDExtended, OutputFieldsPresent) {
+    auto source = create_nmd_source();
+    auto t = make_multi_exon_coding_transcript();
+    std::unordered_map<std::string, std::string> annotations;
+    // Variant in first exon CDS
+    source->annotate("1", 1060, "A", "T", &t, annotations);
+    // Verify expected output fields are present
+    EXPECT_NE(annotations.find("nmd:susceptible"), annotations.end());
+    // Distance should be present for coding multi-exon transcripts
+    EXPECT_NE(annotations.find("nmd:distance_to_junction"), annotations.end());
+    EXPECT_NE(annotations.find("nmd:reason"), annotations.end());
+    // get_fields() should list the advertised fields
+    auto fields = source->get_fields();
+    std::set<std::string> field_set(fields.begin(), fields.end());
+    EXPECT_TRUE(field_set.count("nmd:susceptible"));
+    EXPECT_TRUE(field_set.count("nmd:distance_to_junction"));
+    EXPECT_TRUE(field_set.count("nmd:reason"));
+}

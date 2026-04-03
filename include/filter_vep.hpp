@@ -20,6 +20,7 @@
 #include <functional>
 #include <cctype>
 #include <cmath>
+#include <regex>
 
 namespace vep {
 
@@ -243,8 +244,13 @@ inline bool apply_condition(const FilterableRecord& record, const FilterConditio
             }
         }
     } else if (cond.op == FilterOperator::REGEX) {
-        // Simple regex support (just contains for now)
-        result = (value.find(cond.value) != std::string::npos);
+        try {
+            std::regex re(cond.value);
+            result = std::regex_search(value, re);
+        } catch (const std::regex_error&) {
+            // Fallback to substring match if regex is invalid
+            result = (value.find(cond.value) != std::string::npos);
+        }
     }
 
     return cond.negated ? !result : result;

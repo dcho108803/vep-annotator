@@ -378,6 +378,7 @@ inline StructuralVariant parse_sv_from_vcf(
         } catch (const std::exception&) {
             sv.end = pos;
         }
+        if (sv.end < sv.start) sv.end = sv.start;
     } else {
         // Estimate end from ref/alt lengths
         if (sv.sv_type == SVType::DEL) {

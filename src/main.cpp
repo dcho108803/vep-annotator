@@ -2282,23 +2282,40 @@ int main(int argc, char* argv[]) {
                     std::atomic<size_t> work_idx(0);
                     std::vector<std::thread> workers;
 
+                    std::vector<std::exception_ptr> thread_exceptions(fork_count);
+
                     for (int t = 0; t < fork_count; t++) {
                         workers.emplace_back([&, t, need_all_ann]() {
-                            auto& ann = get_annotator(t);
-                            size_t i;
-                            while ((i = work_idx.fetch_add(1)) < queries.size()) {
-                                auto& q = queries[i];
-                                if (need_all_ann)
-                                    results[i] = ann.annotate(q.chrom, q.pos, q.ref, q.alt);
-                                else {
-                                    results[i].push_back(
-                                        ann.annotate_most_severe(q.chrom, q.pos, q.ref, q.alt));
+                            try {
+                                auto& ann = get_annotator(t);
+                                size_t i;
+                                while ((i = work_idx.fetch_add(1)) < queries.size()) {
+                                    auto& q = queries[i];
+                                    if (need_all_ann)
+                                        results[i] = ann.annotate(q.chrom, q.pos, q.ref, q.alt);
+                                    else {
+                                        results[i].push_back(
+                                            ann.annotate_most_severe(q.chrom, q.pos, q.ref, q.alt));
+                                    }
                                 }
+                            } catch (...) {
+                                thread_exceptions[t] = std::current_exception();
                             }
                         });
                     }
 
                     for (auto& w : workers) w.join();
+
+                    // Rethrow the first thread exception, if any
+                    for (int t = 0; t < fork_count; t++) {
+                        if (thread_exceptions[t]) {
+                            try {
+                                std::rethrow_exception(thread_exceptions[t]);
+                            } catch (const std::exception& e) {
+                                vep::log(vep::LogLevel::ERROR, "Thread " + std::to_string(t) + " failed: " + e.what());
+                            }
+                        }
+                    }
 
                     // Store results in cache
                     for (size_t i = 0; i < queries.size(); i++) {

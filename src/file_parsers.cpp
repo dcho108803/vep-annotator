@@ -159,6 +159,7 @@ TabixTSVReader::TabixTSVReader(
 
     // Read header to get column names
     kstring_t str = {0, 0, nullptr};
+    struct KStringGuard { kstring_t& ks; ~KStringGuard() { free(ks.s); } } str_guard{str};
     while (hts_getline(pimpl_->fp, KS_SEP_LINE, &str) >= 0) {
         if (str.l == 0) continue;
         if (str.s[0] == '#') {
@@ -177,7 +178,6 @@ TabixTSVReader::TabixTSVReader(
             break;  // End of header
         }
     }
-    free(str.s);
 
     // Use provided columns if specified
     if (!columns.empty()) {
@@ -227,8 +227,10 @@ std::vector<std::map<std::string, std::string>> TabixTSVReader::query_range(
 
         hts_itr_t* itr = tbx_itr_querys(pimpl_->tbx, region.c_str());
         if (!itr) continue;
+        struct ItrGuard { hts_itr_t* p; ~ItrGuard() { if (p) tbx_itr_destroy(p); } } itr_guard{itr};
 
         kstring_t str = {0, 0, nullptr};
+        struct KStrGuard { kstring_t& ks; ~KStrGuard() { free(ks.s); } } str_guard{str};
 
         while (tbx_itr_next(pimpl_->fp, pimpl_->tbx, itr, &str) >= 0) {
             auto fields = split_line(std::string(str.s, str.l), '\t');
@@ -240,9 +242,6 @@ std::vector<std::map<std::string, std::string>> TabixTSVReader::query_range(
 
             results.push_back(std::move(row));
         }
-
-        free(str.s);
-        tbx_itr_destroy(itr);
 
         if (!results.empty()) break;
     }

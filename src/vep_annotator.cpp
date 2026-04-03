@@ -240,7 +240,7 @@ bool CodonTable::is_start_codon(const std::string& codon, const std::string& chr
     if (upper == "ATG") return true;
     // Vertebrate mitochondrial alternative start codons (NCBI table 2)
     std::string norm = chromosome;
-    if (norm.length() > 3 && norm.substr(0, 3) == "chr") norm = norm.substr(3);
+    if (norm.size() > 3 && norm.compare(0, 3, "chr") == 0) norm = norm.substr(3);
     if (norm == "MT" || norm == "M") {
         return upper == "ATT" || upper == "ATC" || upper == "ATA" || upper == "GTG";
     }
@@ -259,7 +259,7 @@ bool CodonTable::is_stop_codon(const std::string& codon, const std::string& chro
 
     // Normalize chromosome name for MT detection
     std::string chr = chromosome;
-    if (chr.substr(0, 3) == "chr") chr = chr.substr(3);
+    if (chr.size() > 3 && chr.compare(0, 3, "chr") == 0) chr = chr.substr(3);
 
     if (chr == "M" || chr == "MT") {
         // Vertebrate mitochondrial code: AGA and AGG are stops; TGA is NOT a stop (codes for Trp)
@@ -287,7 +287,7 @@ char CodonTable::translate_mt(const std::string& codon) {
 
 char CodonTable::translate(const std::string& codon, const std::string& chromosome) {
     std::string norm = chromosome;
-    if (norm.length() > 3 && norm.substr(0, 3) == "chr") {
+    if (norm.size() > 3 && norm.compare(0, 3, "chr") == 0) {
         norm = norm.substr(3);
     }
     if (norm == "MT" || norm == "M") {
@@ -487,7 +487,7 @@ public:
 
         // Try with "chr" prefix first, then without
         std::vector<std::string> chrom_variants;
-        if (chrom.substr(0, 3) == "chr") {
+        if (chrom.size() > 3 && chrom.compare(0, 3, "chr") == 0) {
             chrom_variants.push_back(chrom);
             chrom_variants.push_back(chrom.substr(3));
         } else {
@@ -545,7 +545,7 @@ private:
         }
 
         // Normalize chromosome
-        if (record.chrom.length() > 3 && record.chrom.substr(0, 3) == "chr") {
+        if (record.chrom.size() > 3 && record.chrom.compare(0, 3, "chr") == 0) {
             record.chrom = record.chrom.substr(3);
         }
 
@@ -613,7 +613,7 @@ struct VCFAnnotationDatabase::Impl {
     std::set<std::string> tabix_sources;
 
     static std::string normalize_chrom(const std::string& chrom) {
-        if (chrom.length() > 3 && chrom.substr(0, 3) == "chr") {
+        if (chrom.size() > 3 && chrom.compare(0, 3, "chr") == 0) {
             return chrom.substr(3);
         }
         return chrom;
@@ -1035,7 +1035,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 current_chrom = line.substr(1, space_pos - 1);
 
                 // Normalize chromosome name (remove "chr" prefix for consistency)
-                if (current_chrom.substr(0, 3) == "chr") {
+                if (current_chrom.size() > 3 && current_chrom.compare(0, 3, "chr") == 0) {
                     current_chrom = current_chrom.substr(3);
                 }
 
@@ -1082,7 +1082,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 size_t space_pos = line.find(' ');
                 current_chrom = line.substr(1, space_pos - 1);
 
-                if (current_chrom.substr(0, 3) == "chr") {
+                if (current_chrom.size() > 3 && current_chrom.compare(0, 3, "chr") == 0) {
                     current_chrom = current_chrom.substr(3);
                 }
 
@@ -1107,7 +1107,7 @@ ReferenceGenome::~ReferenceGenome() = default;
 
 std::string ReferenceGenome::get_sequence(const std::string& chrom, int start, int end) const {
     std::string normalized_chrom = chrom;
-    if (normalized_chrom.substr(0, 3) == "chr") {
+    if (normalized_chrom.size() > 3 && normalized_chrom.compare(0, 3, "chr") == 0) {
         normalized_chrom = normalized_chrom.substr(3);
     }
 
@@ -1134,7 +1134,7 @@ std::string ReferenceGenome::get_sequence(const std::string& chrom, int start, i
 
 char ReferenceGenome::get_base(const std::string& chrom, int pos) const {
     std::string normalized_chrom = chrom;
-    if (normalized_chrom.size() >= 4 && normalized_chrom[0] == 'c' && normalized_chrom[1] == 'h' && normalized_chrom[2] == 'r') {
+    if (normalized_chrom.size() > 3 && normalized_chrom.compare(0, 3, "chr") == 0) {
         normalized_chrom = normalized_chrom.substr(3);
     }
     auto it = pimpl_->sequences.find(normalized_chrom);
@@ -1146,7 +1146,7 @@ char ReferenceGenome::get_base(const std::string& chrom, int pos) const {
 
 bool ReferenceGenome::has_chromosome(const std::string& chrom) const {
     std::string normalized = chrom;
-    if (normalized.substr(0, 3) == "chr") {
+    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
         normalized = normalized.substr(3);
     }
     return pimpl_->sequences.find(normalized) != pimpl_->sequences.end();
@@ -1154,7 +1154,7 @@ bool ReferenceGenome::has_chromosome(const std::string& chrom) const {
 
 int ReferenceGenome::get_chromosome_length(const std::string& chrom) const {
     std::string normalized = chrom;
-    if (normalized.substr(0, 3) == "chr") {
+    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
         normalized = normalized.substr(3);
     }
     auto it = pimpl_->lengths.find(normalized);
@@ -1298,7 +1298,7 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
         std::getline(iss, attributes);
 
         // Normalize chromosome
-        if (chrom.substr(0, 3) == "chr") {
+        if (chrom.size() > 3 && chrom.compare(0, 3, "chr") == 0) {
             chrom = chrom.substr(3);
         }
 
@@ -1504,7 +1504,7 @@ std::vector<const Transcript*> TranscriptDatabase::get_transcripts_in_region(
     const std::string& chrom, int start, int end) const {
 
     std::string normalized = chrom;
-    if (normalized.substr(0, 3) == "chr") {
+    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
         normalized = normalized.substr(3);
     }
 
@@ -1564,7 +1564,7 @@ std::vector<const Gene*> TranscriptDatabase::get_nearby_genes(
 
     std::vector<const Gene*> results;
     std::string normalized = chrom;
-    if (normalized.substr(0, 3) == "chr") {
+    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
         normalized = normalized.substr(3);
     }
 
@@ -3154,12 +3154,16 @@ int VEPAnnotator::calculate_cds_position(int genomic_pos, const Transcript& tran
 std::string VEPAnnotator::build_cds_sequence(
     const std::string& chrom, const Transcript& transcript) const {
 
-    // Check cache first
-    auto it = cds_cache_.find(transcript.id);
-    if (it != cds_cache_.end()) {
-        return it->second;
+    // Check cache first (under lock)
+    {
+        std::lock_guard<std::mutex> lock(cds_cache_mutex_);
+        auto it = cds_cache_.find(transcript.id);
+        if (it != cds_cache_.end()) {
+            return it->second;
+        }
     }
 
+    // Build CDS sequence without holding the lock
     std::string cds_seq;
     if (transcript.strand == '+') {
         for (const auto& cds : transcript.cds_regions) {
@@ -3185,7 +3189,11 @@ std::string VEPAnnotator::build_cds_sequence(
         }
     }
 
-    cds_cache_[transcript.id] = cds_seq;
+    // Insert into cache (under lock)
+    {
+        std::lock_guard<std::mutex> lock(cds_cache_mutex_);
+        cds_cache_[transcript.id] = cds_seq;
+    }
     return cds_seq;
 }
 

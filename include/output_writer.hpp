@@ -410,8 +410,11 @@ public:
 
     void close() override {
         if (gz_file_) {
-            gzclose(gz_file_);
+            int ret = gzclose(gz_file_);
             gz_file_ = nullptr;
+            if (ret != Z_OK) {
+                log(LogLevel::WARNING, "gzclose() failed");
+            }
         }
         if (output_.is_open()) {
             output_.close();
@@ -430,7 +433,9 @@ private:
         if (use_stdout_) {
             std::cout << s;
         } else if (compress_ && gz_file_) {
-            gzwrite(gz_file_, s.c_str(), static_cast<unsigned int>(s.size()));
+            if (gzwrite(gz_file_, s.c_str(), static_cast<unsigned int>(s.size())) != static_cast<int>(s.size())) {
+                throw std::runtime_error("Failed to write to compressed output");
+            }
         } else {
             output_ << s;
         }
@@ -506,8 +511,11 @@ public:
 
     void close() override {
         if (gz_file_) {
-            gzclose(gz_file_);
+            int ret = gzclose(gz_file_);
             gz_file_ = nullptr;
+            if (ret != Z_OK) {
+                log(LogLevel::WARNING, "gzclose() failed");
+            }
         }
         if (output_.is_open()) {
             output_.close();
@@ -1031,7 +1039,9 @@ private:
         if (use_stdout_) {
             std::cout << s;
         } else if (compress_ && gz_file_) {
-            gzwrite(gz_file_, s.c_str(), static_cast<unsigned int>(s.size()));
+            if (gzwrite(gz_file_, s.c_str(), static_cast<unsigned int>(s.size())) != static_cast<int>(s.size())) {
+                throw std::runtime_error("Failed to write to compressed output");
+            }
         } else {
             output_ << s;
         }
@@ -1074,7 +1084,7 @@ private:
                 case '\t': result += "\\t"; break;
                 default:
                     if (static_cast<unsigned char>(c) < 0x20) {
-                        char buf[8];
+                        char buf[16];
                         std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
                         result += buf;
                     } else {
@@ -1281,8 +1291,11 @@ public:
     void close() override {
         flush_variant();
         if (gz_file_) {
-            gzclose(gz_file_);
+            int ret = gzclose(gz_file_);
             gz_file_ = nullptr;
+            if (ret != Z_OK) {
+                log(LogLevel::WARNING, "gzclose() failed");
+            }
         }
         if (output_.is_open()) {
             output_.close();
@@ -1308,7 +1321,9 @@ private:
         if (use_stdout_) {
             std::cout << s;
         } else if (compress_ && gz_file_) {
-            gzwrite(gz_file_, s.c_str(), static_cast<unsigned int>(s.size()));
+            if (gzwrite(gz_file_, s.c_str(), static_cast<unsigned int>(s.size())) != static_cast<int>(s.size())) {
+                throw std::runtime_error("Failed to write to compressed output");
+            }
         } else {
             output_ << s;
         }

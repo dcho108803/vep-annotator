@@ -22,6 +22,7 @@
 #include <memory>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <shared_mutex>
 
 namespace vep {
@@ -715,6 +716,7 @@ private:
 
     // Cache CDS sequences per transcript to avoid rebuilding for every variant
     mutable std::unordered_map<std::string, std::string> cds_cache_;
+    mutable std::mutex cds_cache_mutex_;
 
     /**
      * Annotate variant against a single transcript

@@ -1620,8 +1620,9 @@ int main(int argc, char* argv[]) {
                 }
             }
             if (!config_args.empty()) {
-                std::cerr << "Warning: --config loaded " << config_args.size() << " arguments from " << config_file_path
-                          << " but config file support is not yet implemented. Use command-line flags instead." << std::endl;
+                std::cerr << "Warning: --config parsed " << config_args.size() << " options from " << config_file_path
+                          << " but they are NOT applied. Config file support is not yet implemented. "
+                          << "Please specify all options as command-line flags instead." << std::endl;
             }
         } else {
             std::cerr << "Warning: Cannot open config file: " << config_file_path << std::endl;
@@ -3081,6 +3082,12 @@ int main(int argc, char* argv[]) {
             if (!parsed) {
                 std::cerr << "Error: No variant specified." << std::endl;
                 return 1;
+            }
+
+            // Apply chromosome synonym mapping for single-variant mode
+            if (!chrom_synonyms.empty()) {
+                auto syn_it = chrom_synonyms.find(chrom);
+                if (syn_it != chrom_synonyms.end()) chrom = syn_it->second;
             }
 
             vep::VEPAnnotator annotator(gtf_path, fasta_path);

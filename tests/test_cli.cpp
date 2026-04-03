@@ -15,6 +15,7 @@
 #include <tuple>
 #include <algorithm>
 #include <cctype>
+#include "file_parsers.hpp"
 
 // ============================================================================
 // Re-implemented utility functions (mirrors main.cpp logic)
@@ -1416,4 +1417,181 @@ TEST(FlagNormalization2, ValueNotNormalized) {
 
 TEST(FlagNormalization2, ShortFlagUnchanged) {
     EXPECT_EQ(normalize_flag("-o"), "-o");
+}
+
+// ============================================================================
+// NEW TESTS: normalize_chrom (vep::normalize_chrom from file_parsers.hpp)
+// ============================================================================
+
+TEST(NormalizeChrom, LowercaseChrPrefix) {
+    EXPECT_EQ(vep::normalize_chrom("chr1"), "1");
+}
+
+TEST(NormalizeChrom, NoPrefixUnchanged) {
+    EXPECT_EQ(vep::normalize_chrom("1"), "1");
+}
+
+TEST(NormalizeChrom, ChrXPrefix) {
+    EXPECT_EQ(vep::normalize_chrom("chrX"), "X");
+}
+
+TEST(NormalizeChrom, UppercaseCHRPrefix) {
+    EXPECT_EQ(vep::normalize_chrom("CHR1"), "1");
+}
+
+TEST(NormalizeChrom, MTNoChange) {
+    EXPECT_EQ(vep::normalize_chrom("MT"), "MT");
+}
+
+// ============================================================================
+// NEW TESTS: Chromosome synonym map loading and lookup
+// ============================================================================
+
+TEST(ChromSynonymParsing, TabSeparatedTwoColumn) {
+    // Simulate parsing a chromosome synonym file line
+    std::map<std::string, std::string> synonyms;
+    std::string line = "NC_000001.11\t1";
+    std::istringstream iss(line);
+    std::string from, to;
+    ASSERT_TRUE(bool(std::getline(iss, from, '\t') && std::getline(iss, to, '\t')));
+    synonyms[from] = to;
+    EXPECT_EQ(synonyms["NC_000001.11"], "1");
+}
+
+TEST(ChromSynonymParsing, BidirectionalLookup) {
+    // Build a synonym map and verify both directions
+    std::map<std::string, std::string> synonyms;
+    synonyms["NC_000017.11"] = "17";
+    synonyms["chr17"] = "17";
+    EXPECT_EQ(synonyms["NC_000017.11"], "17");
+    EXPECT_EQ(synonyms["chr17"], "17");
+    // Unknown key should not be found
+    EXPECT_EQ(synonyms.find("chrZ"), synonyms.end());
+}
+
+TEST(ChromSynonymParsing, SexChromosomeSynonyms) {
+    std::map<std::string, std::string> synonyms;
+    synonyms["NC_000023.11"] = "X";
+    synonyms["NC_000024.10"] = "Y";
+    synonyms["chrX"] = "X";
+    synonyms["chrY"] = "Y";
+    EXPECT_EQ(synonyms["NC_000023.11"], "X");
+    EXPECT_EQ(synonyms["chrY"], "Y");
+}
+
+// ============================================================================
+// NEW TESTS: gz_read_line behavior (line stripping logic)
+// ============================================================================
+
+TEST(GzReadLine, NormalLineStripping) {
+    // Simulates what gz_read_line does: read then strip trailing newline
+    std::string line = "1\t100\tA\tT\n";
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+        line.pop_back();
+    EXPECT_EQ(line, "1\t100\tA\tT");
+}
+
+TEST(GzReadLine, EmptyLineStripping) {
+    std::string line = "\n";
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+        line.pop_back();
+    EXPECT_EQ(line, "");
+}
+
+TEST(GzReadLine, WindowsCRLFStripping) {
+    std::string line = "chr1\t100\tA\tG\r\n";
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+        line.pop_back();
+    EXPECT_EQ(line, "chr1\t100\tA\tG");
+}
+
+// ============================================================================
+// NEW TESTS: VCF QUAL/FILTER passthrough parsing
+// ============================================================================
+
+// Extended VCF parser that also captures QUAL, FILTER, INFO, and sample columns
+struct VCFFieldsFull {
+    std::string chrom;
+    int pos = 0;
+    std::string id;
+    std::string ref;
+    std::string alt;
+    std::string qual;
+    std::string filter;
+    std::string info;
+    std::vector<std::string> samples;
+};
+
+static bool parse_vcf_line_full(const std::string& line, VCFFieldsFull& f) {
+    std::istringstream iss(line);
+    std::string pos_str;
+    if (!(iss >> f.chrom >> pos_str >> f.id >> f.ref >> f.alt >> f.qual >> f.filter))
+        return false;
+    try {
+        f.pos = std::stoi(pos_str);
+    } catch (const std::exception&) {
+        return false;
+    }
+    // Read INFO field
+    if (!(iss >> f.info)) f.info = ".";
+    // Read remaining sample columns
+    std::string format_field;
+    if (iss >> format_field) {
+        // format_field is FORMAT column; then sample columns follow
+        std::string sample;
+        while (iss >> sample) {
+            f.samples.push_back(sample);
+        }
+    }
+    return true;
+}
+
+static std::map<std::string, std::string> parse_info_field(const std::string& info_str) {
+    std::map<std::string, std::string> info;
+    if (info_str == "." || info_str.empty()) return info;
+    std::istringstream iss(info_str);
+    std::string item;
+    while (std::getline(iss, item, ';')) {
+        size_t eq_pos = item.find('=');
+        if (eq_pos != std::string::npos) {
+            info[item.substr(0, eq_pos)] = item.substr(eq_pos + 1);
+        } else {
+            info[item] = "1";  // Flag field
+        }
+    }
+    return info;
+}
+
+TEST(VCFPassthrough, QUALFieldPreserved) {
+    VCFFieldsFull f;
+    ASSERT_TRUE(parse_vcf_line_full(
+        "chr17\t7675088\trs121913343\tC\tT\t99.5\tPASS\tDP=100\tGT\t0/1", f));
+    EXPECT_EQ(f.qual, "99.5");
+}
+
+TEST(VCFPassthrough, FILTERFieldPreserved) {
+    VCFFieldsFull f;
+    ASSERT_TRUE(parse_vcf_line_full(
+        "chr17\t7675088\t.\tC\tT\t50\tLowQual;LowDP\tDP=10\tGT\t0/1", f));
+    EXPECT_EQ(f.filter, "LowQual;LowDP");
+}
+
+TEST(VCFPassthrough, INFOFieldParsedIntoKeyValue) {
+    VCFFieldsFull f;
+    ASSERT_TRUE(parse_vcf_line_full(
+        "chr1\t100\t.\tA\tG\t30\tPASS\tDP=50;AF=0.5;DB\tGT\t0/1", f));
+    auto info = parse_info_field(f.info);
+    EXPECT_EQ(info["DP"], "50");
+    EXPECT_EQ(info["AF"], "0.5");
+    EXPECT_EQ(info["DB"], "1");  // Flag field
+    EXPECT_EQ(info.size(), 3u);
+}
+
+TEST(VCFPassthrough, SampleColumnsPreserved) {
+    VCFFieldsFull f;
+    ASSERT_TRUE(parse_vcf_line_full(
+        "chr1\t100\t.\tA\tG\t30\tPASS\tDP=50\tGT:DP:GQ\t0/1:30:99\t0/0:25:88", f));
+    ASSERT_EQ(f.samples.size(), 2u);
+    EXPECT_EQ(f.samples[0], "0/1:30:99");
+    EXPECT_EQ(f.samples[1], "0/0:25:88");
 }

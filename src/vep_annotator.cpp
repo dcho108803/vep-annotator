@@ -613,10 +613,8 @@ struct VCFAnnotationDatabase::Impl {
     std::set<std::string> tabix_sources;
 
     static std::string normalize_chrom(const std::string& chrom) {
-        if (chrom.size() > 3 && chrom.compare(0, 3, "chr") == 0) {
-            return chrom.substr(3);
-        }
-        return chrom;
+        // Delegate to the canonical case-insensitive implementation in file_parsers.hpp
+        return vep::normalize_chrom(chrom);
     }
 
     static std::map<std::string, std::string> parse_info(const std::string& info_str) {

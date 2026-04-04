@@ -1595,3 +1595,157 @@ TEST(VCFPassthrough, SampleColumnsPreserved) {
     EXPECT_EQ(f.samples[0], "0/1:30:99");
     EXPECT_EQ(f.samples[1], "0/0:25:88");
 }
+
+// ============================================================================
+// Reference allele verification (--check-ref logic)
+// ============================================================================
+
+static bool verify_reference_impl(const std::string& fasta_ref, const std::string& vcf_ref) {
+    // Mirrors verify_reference() from main.cpp
+    std::string ref_upper = vcf_ref, fasta_upper = fasta_ref;
+    for (auto& c : ref_upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (auto& c : fasta_upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return ref_upper == fasta_upper;
+}
+
+TEST(CheckRef, MatchingReference) {
+    EXPECT_TRUE(verify_reference_impl("A", "A"));
+    EXPECT_TRUE(verify_reference_impl("ATCG", "ATCG"));
+}
+
+TEST(CheckRef, CaseInsensitiveMatch) {
+    EXPECT_TRUE(verify_reference_impl("a", "A"));
+    EXPECT_TRUE(verify_reference_impl("atcg", "ATCG"));
+    EXPECT_TRUE(verify_reference_impl("AtCg", "aTcG"));
+}
+
+TEST(CheckRef, Mismatch) {
+    EXPECT_FALSE(verify_reference_impl("A", "T"));
+    EXPECT_FALSE(verify_reference_impl("ATG", "ATC"));
+}
+
+TEST(CheckRef, EmptyStrings) {
+    EXPECT_TRUE(verify_reference_impl("", ""));
+    EXPECT_FALSE(verify_reference_impl("A", ""));
+    EXPECT_FALSE(verify_reference_impl("", "A"));
+}
+
+TEST(CheckRef, LongReference) {
+    std::string long_ref(100, 'A');
+    EXPECT_TRUE(verify_reference_impl(long_ref, long_ref));
+    std::string mismatch = long_ref;
+    mismatch[50] = 'T';
+    EXPECT_FALSE(verify_reference_impl(long_ref, mismatch));
+}
+
+// ============================================================================
+// Non-variant site filtering (ref==alt, alt==".", alt=="*")
+// ============================================================================
+
+static bool is_non_variant(const std::string& ref, const std::string& alt) {
+    return (ref == alt || alt == "." || alt == "*");
+}
+
+TEST(NonVariantFilter, RefEqualsAlt) {
+    EXPECT_TRUE(is_non_variant("A", "A"));
+    EXPECT_TRUE(is_non_variant("ATG", "ATG"));
+}
+
+TEST(NonVariantFilter, DotAlt) {
+    EXPECT_TRUE(is_non_variant("A", "."));
+}
+
+TEST(NonVariantFilter, StarAlt) {
+    EXPECT_TRUE(is_non_variant("A", "*"));
+}
+
+TEST(NonVariantFilter, RealVariant) {
+    EXPECT_FALSE(is_non_variant("A", "T"));
+    EXPECT_FALSE(is_non_variant("A", "ATG"));
+    EXPECT_FALSE(is_non_variant("ATG", "A"));
+}
+
+// ============================================================================
+// Chromosome filtering (--chr flag)
+// ============================================================================
+
+static bool passes_chr_filter(const std::string& chrom, const std::set<std::string>& allowed) {
+    if (allowed.empty()) return true;
+    // Normalize: strip "chr" prefix for matching
+    std::string norm = chrom;
+    if (norm.size() > 3 && norm.compare(0, 3, "chr") == 0) norm = norm.substr(3);
+    // Check both forms
+    return allowed.count(chrom) > 0 || allowed.count(norm) > 0 ||
+           allowed.count("chr" + norm) > 0;
+}
+
+TEST(ChrFilterDistance, EmptyAllowsAll) {
+    std::set<std::string> empty;
+    EXPECT_TRUE(passes_chr_filter("chr1", empty));
+    EXPECT_TRUE(passes_chr_filter("22", empty));
+}
+
+TEST(ChrFilterDistance, MatchWithPrefix) {
+    std::set<std::string> allowed = {"chr1", "chr2"};
+    EXPECT_TRUE(passes_chr_filter("chr1", allowed));
+    EXPECT_TRUE(passes_chr_filter("1", allowed));
+    EXPECT_FALSE(passes_chr_filter("chr3", allowed));
+}
+
+TEST(ChrFilterDistance, MatchWithoutPrefix) {
+    std::set<std::string> allowed = {"1", "X", "MT"};
+    EXPECT_TRUE(passes_chr_filter("1", allowed));
+    EXPECT_TRUE(passes_chr_filter("chr1", allowed));
+    EXPECT_TRUE(passes_chr_filter("X", allowed));
+    EXPECT_FALSE(passes_chr_filter("Y", allowed));
+}
+
+TEST(ChrFilterDistance, MitochondrialFiltering) {
+    std::set<std::string> allowed = {"MT"};
+    EXPECT_TRUE(passes_chr_filter("MT", allowed));
+    EXPECT_TRUE(passes_chr_filter("chrMT", allowed));
+    EXPECT_FALSE(passes_chr_filter("1", allowed));
+}
+
+// ============================================================================
+// Distance threshold for upstream/downstream
+// ============================================================================
+
+static bool is_within_distance(int variant_pos, int feature_start, int feature_end, int distance) {
+    if (variant_pos >= feature_start && variant_pos <= feature_end) return true; // overlaps
+    int upstream_dist = feature_start - variant_pos;
+    int downstream_dist = variant_pos - feature_end;
+    return (upstream_dist > 0 && upstream_dist <= distance) ||
+           (downstream_dist > 0 && downstream_dist <= distance);
+}
+
+TEST(DistanceThreshold, Overlapping) {
+    EXPECT_TRUE(is_within_distance(1000, 900, 1100, 5000));
+}
+
+TEST(DistanceThreshold, WithinUpstream) {
+    EXPECT_TRUE(is_within_distance(800, 900, 1100, 5000));
+    EXPECT_TRUE(is_within_distance(800, 900, 1100, 100));
+}
+
+TEST(DistanceThreshold, WithinDownstream) {
+    EXPECT_TRUE(is_within_distance(1200, 900, 1100, 5000));
+    EXPECT_TRUE(is_within_distance(1200, 900, 1100, 100));
+}
+
+TEST(DistanceThreshold, BeyondDistance) {
+    EXPECT_FALSE(is_within_distance(100, 900, 1100, 500));
+    EXPECT_FALSE(is_within_distance(2000, 900, 1100, 500));
+}
+
+TEST(DistanceThreshold, ExactBoundary) {
+    // Variant exactly at distance threshold
+    EXPECT_TRUE(is_within_distance(400, 900, 1100, 500));  // 900-400=500
+    EXPECT_FALSE(is_within_distance(399, 900, 1100, 500)); // 900-399=501
+}
+
+TEST(DistanceThreshold, DefaultDistance5000) {
+    EXPECT_TRUE(is_within_distance(1, 5000, 6000, 5000));  // 5000-1=4999 <= 5000
+    EXPECT_TRUE(is_within_distance(0, 5000, 6000, 5000));  // 5000-0=5000 <= 5000
+    EXPECT_FALSE(is_within_distance(-1, 5000, 6000, 5000)); // edge: negative pos
+}

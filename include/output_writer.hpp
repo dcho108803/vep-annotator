@@ -195,6 +195,20 @@ inline std::string format_protein_position(const VariantAnnotation& ann, const s
     return s;
 }
 
+// Replace tab/newline/CR characters with spaces so a single field value cannot
+// corrupt TSV column alignment. Used defensively on any field that could
+// originate from an external annotation source (GTF attributes, VCF INFO,
+// custom annotations, HGVS strings generated from user data, etc.).
+inline std::string sanitize_tsv(const std::string& s) {
+    if (s.find_first_of("\t\n\r") == std::string::npos) return s;
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        out += (c == '\t' || c == '\n' || c == '\r') ? ' ' : c;
+    }
+    return out;
+}
+
 /**
  * TSV output writer (default format)
  */
@@ -249,13 +263,14 @@ public:
 
         // #Uploaded_variation: Use VCF ID (rs#) if available, else CHR_POS_ALLELES
         if (!ann.vcf_id.empty() && ann.vcf_id != ".") {
-            line << ann.vcf_id << "\t";
+            line << sanitize_tsv(ann.vcf_id) << "\t";
         } else {
             // Ensembl format: CHR_POS_REF/ALT using display alleles
             std::string d_ref = ann.display_ref.empty() ? ann.ref_allele : ann.display_ref;
             std::string d_alt = ann.display_alt.empty() ? ann.alt_allele : ann.display_alt;
             int d_start = ann.display_start > 0 ? ann.display_start : ann.position;
-            line << ann.chromosome << "_" << d_start << "_" << d_ref << "/" << d_alt << "\t";
+            line << sanitize_tsv(ann.chromosome) << "_" << d_start << "_"
+                 << sanitize_tsv(d_ref) << "/" << sanitize_tsv(d_alt) << "\t";
         }
 
         // Location: CHROM:POS or CHROM:POS-END using display coords
@@ -263,7 +278,7 @@ public:
             int d_start = ann.display_start > 0 ? ann.display_start : ann.position;
             int d_end = ann.display_end > 0 ? ann.display_end :
                         (ann.position + static_cast<int>(ann.ref_allele.size()) - 1);
-            line << ann.chromosome << ":" << d_start;
+            line << sanitize_tsv(ann.chromosome) << ":" << d_start;
             if (d_end > d_start) {
                 line << "-" << d_end;
             }
@@ -271,16 +286,16 @@ public:
         line << "\t";
 
         // Allele: the display alt allele (Ensembl format: "-" for deletions)
-        line << (ann.display_alt.empty() ? ann.alt_allele : ann.display_alt) << "\t";
+        line << sanitize_tsv(ann.display_alt.empty() ? ann.alt_allele : ann.display_alt) << "\t";
 
         // Gene
-        line << ann.gene_id << "\t";
+        line << sanitize_tsv(ann.gene_id) << "\t";
 
         // Feature (transcript ID)
-        line << ann.transcript_id << "\t";
+        line << sanitize_tsv(ann.transcript_id) << "\t";
 
         // Feature_type
-        line << ann.feature_type << "\t";
+        line << sanitize_tsv(ann.feature_type) << "\t";
 
         // Consequence
         line << format_consequence(ann) << "\t";
@@ -295,13 +310,13 @@ public:
         line << format_protein_position(ann, "-") << "\t";
 
         // Amino_acids
-        line << (ann.amino_acids.empty() ? "-" : ann.amino_acids) << "\t";
+        line << (ann.amino_acids.empty() ? "-" : sanitize_tsv(ann.amino_acids)) << "\t";
 
         // Codons
-        line << (ann.codons.empty() ? "-" : ann.codons) << "\t";
+        line << (ann.codons.empty() ? "-" : sanitize_tsv(ann.codons)) << "\t";
 
         // Existing_variation
-        line << (ann.existing_variation.empty() ? "-" : ann.existing_variation) << "\t";
+        line << (ann.existing_variation.empty() ? "-" : sanitize_tsv(ann.existing_variation)) << "\t";
 
         // Extra: key=value pairs separated by semicolons
         std::ostringstream extra;
@@ -310,7 +325,9 @@ public:
         auto append_extra = [&](const std::string& key, const std::string& value) {
             if (!value.empty()) {
                 if (!first_extra) extra << ";";
-                extra << key << "=" << value;
+                // Sanitize both key and value so tab/newline from external
+                // annotation sources can never break TSV alignment.
+                extra << sanitize_tsv(key) << "=" << sanitize_tsv(value);
                 first_extra = false;
             }
         };

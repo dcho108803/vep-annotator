@@ -384,7 +384,7 @@ TEST(BNDParsing, ForwardStrand) {
     EXPECT_EQ(sv.sv_type, SVType::BND);
     EXPECT_EQ(sv.bnd_mate_chrom, "chr2");
     EXPECT_EQ(sv.bnd_mate_pos, 12345);
-    EXPECT_TRUE(sv.bnd_mate_forward);  // bases before bracket
+    EXPECT_TRUE(sv.local_seq_before_bracket);  // bases before bracket
 }
 
 TEST(BNDParsing, ReverseStrand) {
@@ -394,7 +394,7 @@ TEST(BNDParsing, ReverseStrand) {
     EXPECT_EQ(sv.sv_type, SVType::BND);
     EXPECT_EQ(sv.bnd_mate_chrom, "chr2");
     EXPECT_EQ(sv.bnd_mate_pos, 12345);
-    EXPECT_FALSE(sv.bnd_mate_forward);  // bases after bracket
+    EXPECT_FALSE(sv.local_seq_before_bracket);  // bases after bracket
 }
 
 TEST(BNDParsing, SameChromosomeBND) {

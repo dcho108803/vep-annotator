@@ -658,7 +658,116 @@ std::string gz_read_line(gzFile gz, bool& eof) {
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// Parse a --config FILE into a vector of CLI-style arguments ("--key", "value").
+// Returns false if the file cannot be opened. Comments starting with '#' are
+// stripped. Accepts either "key = value", "key value", or bare flag lines.
+// ---------------------------------------------------------------------------
+static bool load_config_file(const std::string& path, std::vector<std::string>& out) {
+    std::ifstream config_in(path);
+    if (!config_in.is_open()) return false;
+
+    std::string line;
+    while (std::getline(config_in, line)) {
+        // Strip comments
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line = line.substr(0, hash);
+        // Trim whitespace
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front()))) line.erase(0, 1);
+        if (line.empty()) continue;
+
+        size_t eq = line.find('=');
+        if (eq != std::string::npos) {
+            std::string key = line.substr(0, eq);
+            std::string val = line.substr(eq + 1);
+            while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
+            while (!val.empty() && std::isspace(static_cast<unsigned char>(val.front()))) val.erase(0, 1);
+            while (!val.empty() && std::isspace(static_cast<unsigned char>(val.back()))) val.pop_back();
+            if (key.empty()) continue;
+            if (key[0] != '-') key = "--" + key;
+            out.push_back(key);
+            if (!val.empty()) out.push_back(val);
+        } else {
+            // Bare flag or whitespace-separated tokens
+            std::istringstream iss(line);
+            std::string tok;
+            bool first = true;
+            while (iss >> tok) {
+                if (first && !tok.empty() && tok[0] != '-') tok = "--" + tok;
+                out.push_back(tok);
+                first = false;
+            }
+        }
+    }
+    return true;
+}
+
 int main(int argc, char* argv[]) {
+    // --------------------------------------------------------------
+    // Early pre-pass: if a --config FILE is supplied, load it and
+    // prepend its options to argv so that the main parsing loop can
+    // pick them up as defaults. Explicit CLI args override config
+    // values because they come later in the merged argument list.
+    // The --config arg itself is stripped from argv so the main loop
+    // does not see it as an unknown option.
+    // --------------------------------------------------------------
+    std::vector<std::string> merged_args_storage;
+    std::vector<char*> merged_argv_storage;
+    {
+        auto is_config_flag = [](const std::string& a) {
+            return a == "--config" || a == "--config_file" || a == "--config-file";
+        };
+        auto is_config_eq = [](const std::string& a) -> size_t {
+            size_t eq = a.find('=');
+            if (eq == std::string::npos) return std::string::npos;
+            std::string key = a.substr(0, eq);
+            if (key == "--config" || key == "--config_file" || key == "--config-file") return eq;
+            return std::string::npos;
+        };
+
+        std::string cfg_path;
+        int cfg_start = -1;   // index in argv where --config begins
+        int cfg_len = 0;      // number of argv elements consumed (1 or 2)
+        for (int i = 1; i < argc; ++i) {
+            std::string a = argv[i];
+            if (is_config_flag(a) && i + 1 < argc) {
+                cfg_path = argv[i + 1];
+                cfg_start = i;
+                cfg_len = 2;
+                break;
+            }
+            size_t eq = is_config_eq(a);
+            if (eq != std::string::npos) {
+                cfg_path = a.substr(eq + 1);
+                cfg_start = i;
+                cfg_len = 1;
+                break;
+            }
+        }
+
+        if (!cfg_path.empty()) {
+            std::vector<std::string> cfg_args;
+            if (!load_config_file(cfg_path, cfg_args)) {
+                std::cerr << "Error: cannot open --config file: " << cfg_path << std::endl;
+                return 1;
+            }
+            merged_args_storage.reserve(cfg_args.size() + argc);
+            merged_args_storage.emplace_back(argv[0]);
+            for (auto& s : cfg_args) merged_args_storage.push_back(std::move(s));
+            // Copy remaining argv, skipping the --config arg(s).
+            for (int i = 1; i < argc; ++i) {
+                if (cfg_start != -1 && i >= cfg_start && i < cfg_start + cfg_len) continue;
+                merged_args_storage.emplace_back(argv[i]);
+            }
+            merged_argv_storage.reserve(merged_args_storage.size() + 1);
+            for (auto& s : merged_args_storage) merged_argv_storage.push_back(const_cast<char*>(s.c_str()));
+            merged_argv_storage.push_back(nullptr);
+            argc = static_cast<int>(merged_args_storage.size());
+            argv = merged_argv_storage.data();
+        }
+    }
+
     // Basic options
     std::string gtf_path;
     std::string fasta_path;
@@ -1585,68 +1694,30 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Load config file if specified (applies settings as defaults)
-    if (!config_file_path.empty()) {
-        std::ifstream config_in(config_file_path);
-        if (config_in.is_open()) {
-            std::string cfg_line;
-            std::vector<std::string> config_args;
-            while (std::getline(config_in, cfg_line)) {
-                // Strip comments and whitespace
-                size_t hash = cfg_line.find('#');
-                if (hash != std::string::npos) cfg_line = cfg_line.substr(0, hash);
-                while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.back()))) cfg_line.pop_back();
-                while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.front()))) cfg_line.erase(0, 1);
-                if (cfg_line.empty()) continue;
-
-                // Parse "key = value" or "key value" format
-                size_t eq = cfg_line.find('=');
-                if (eq != std::string::npos) {
-                    std::string key = cfg_line.substr(0, eq);
-                    std::string val = cfg_line.substr(eq + 1);
-                    while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
-                    while (!val.empty() && std::isspace(static_cast<unsigned char>(val.front()))) val.erase(0, 1);
-                    if (!key.empty()) {
-                        if (key[0] != '-') key = "--" + key;
-                        config_args.push_back(key);
-                        if (!val.empty()) config_args.push_back(val);
-                    }
-                } else {
-                    std::istringstream cfg_iss(cfg_line);
-                    std::string token;
-                    while (cfg_iss >> token) {
-                        config_args.push_back(token);
-                    }
-                }
-            }
-            if (!config_args.empty()) {
-                std::cerr << "Warning: --config parsed " << config_args.size() << " options from " << config_file_path
-                          << " but they are NOT applied. Config file support is not yet implemented. "
-                          << "Please specify all options as command-line flags instead." << std::endl;
-            }
-        } else {
-            std::cerr << "Warning: Cannot open config file: " << config_file_path << std::endl;
-        }
-    }
+    // --config FILE was already applied in the early pre-pass above,
+    // which prepends its options to argv so they act as defaults that
+    // explicit CLI flags can override.
 
     // Load chromosome synonyms file
     if (!synonyms_path.empty()) {
         std::ifstream syn_file(synonyms_path);
-        if (syn_file.is_open()) {
-            std::string syn_line;
-            while (std::getline(syn_file, syn_line)) {
-                if (syn_line.empty() || syn_line[0] == '#') continue;
-                std::istringstream syn_iss(syn_line);
-                std::string synonym, canonical;
-                if (syn_iss >> synonym >> canonical) {
-                    chrom_synonyms[synonym] = canonical;
-                }
+        if (!syn_file.is_open()) {
+            // Hard-fail: silently running without the requested synonym
+            // mapping would produce misleading "chromosome not found" errors.
+            std::cerr << "Error: cannot open --synonyms file: " << synonyms_path << std::endl;
+            return 1;
+        }
+        std::string syn_line;
+        while (std::getline(syn_file, syn_line)) {
+            if (syn_line.empty() || syn_line[0] == '#') continue;
+            std::istringstream syn_iss(syn_line);
+            std::string synonym, canonical;
+            if (syn_iss >> synonym >> canonical) {
+                chrom_synonyms[synonym] = canonical;
             }
-            if (!quiet_mode) {
-                std::cerr << "Loaded " << chrom_synonyms.size() << " chromosome synonyms from " << synonyms_path << std::endl;
-            }
-        } else {
-            std::cerr << "Warning: Cannot open synonyms file: " << synonyms_path << std::endl;
+        }
+        if (!quiet_mode) {
+            std::cerr << "Loaded " << chrom_synonyms.size() << " chromosome synonyms from " << synonyms_path << std::endl;
         }
     }
 

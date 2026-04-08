@@ -93,7 +93,11 @@ struct StructuralVariant {
     // Breakend information (for BND)
     std::string bnd_mate_chrom;
     int bnd_mate_pos = 0;
-    bool bnd_mate_forward = true;
+    // True when the local reference base appears BEFORE the bracketed mate in
+    // the VCF ALT field (forms  t[p[  or  t]p] ); false when it appears AFTER
+    // ( ]p]t  or  [p[t ). This describes the LOCAL end of the breakend join,
+    // not the mate's strand. Renamed from `bnd_mate_forward` which was misleading.
+    bool local_seq_before_bracket = true;
 
     // Computed properties
     int length() const {
@@ -450,10 +454,12 @@ inline StructuralVariant parse_sv_from_vcf(
                 } catch (const std::exception&) {}
             }
 
-            // VCF BND orientation: sequence before brackets = forward on local end
-            // t[p[ or t]p] = forward (bases before first bracket)
-            // ]p]t or [p[t = reverse complement (bases after last bracket)
-            sv.bnd_mate_forward = (bracket_pos > 0);
+            // VCF BND orientation:
+            //   t[p[ or t]p]  -> local sequence appears BEFORE the bracketed mate
+            //   ]p]t or [p[t  -> local sequence appears AFTER  the bracketed mate
+            // bracket_pos > 0 means at least one character preceded the bracket,
+            // i.e. the local reference sequence is the prefix of the ALT.
+            sv.local_seq_before_bracket = (bracket_pos > 0);
         }
     }
 

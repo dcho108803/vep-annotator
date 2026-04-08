@@ -522,7 +522,9 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        std::sort(annotations.begin(), annotations.end(),
+        // stable_sort: ties preserve input order for deterministic output
+        // across runs/builds (matches Perl VEP tie-breaking behaviour).
+        std::stable_sort(annotations.begin(), annotations.end(),
             [this](const AnnotationWithMeta& a, const AnnotationWithMeta& b) {
                 return is_better(a, b);
             });
@@ -631,8 +633,8 @@ private:
     void flag_picked(std::vector<AnnotationWithMeta>& annotations) const {
         if (annotations.empty()) return;
 
-        // Sort to find the best one
-        std::sort(annotations.begin(), annotations.end(),
+        // stable_sort so ties preserve input order (deterministic pick).
+        std::stable_sort(annotations.begin(), annotations.end(),
             [this](const AnnotationWithMeta& a, const AnnotationWithMeta& b) {
                 return is_better(a, b);
             });
@@ -680,7 +682,8 @@ private:
         for (auto& pair : by_allele) {
             if (pair.second.empty()) continue;
 
-            std::sort(pair.second.begin(), pair.second.end(),
+            // stable_sort so ties preserve input order (deterministic pick).
+            std::stable_sort(pair.second.begin(), pair.second.end(),
                 [this](const AnnotationWithMeta* a, const AnnotationWithMeta* b) {
                     return is_better(*a, *b);
                 });
@@ -707,7 +710,8 @@ private:
         for (auto& pair : by_allele_gene) {
             if (pair.second.empty()) continue;
 
-            std::sort(pair.second.begin(), pair.second.end(),
+            // stable_sort so ties preserve input order (deterministic pick).
+            std::stable_sort(pair.second.begin(), pair.second.end(),
                 [this](const AnnotationWithMeta* a, const AnnotationWithMeta* b) {
                     return is_better(*a, *b);
                 });

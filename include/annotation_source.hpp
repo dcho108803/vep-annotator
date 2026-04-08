@@ -208,7 +208,24 @@ public:
 };
 
 /**
- * Annotation source manager - handles multiple sources
+ * Annotation source manager - handles multiple sources.
+ *
+ * THREAD-SAFETY CONTRACT:
+ *   `annotate_all()` takes only a shared (read) lock and therefore permits
+ *   multiple threads to iterate `sources_` concurrently. It does NOT serialize
+ *   individual source->annotate() calls. Many sources (dbNSFP, SpliceAI,
+ *   dbscSNV, conservation/bigWig, etc.) wrap htslib/libBigWig file handles
+ *   which are NOT thread-safe - each one returns `is_thread_safe() == false`.
+ *
+ *   The safe usage pattern is therefore: build ONE AnnotationSourceManager
+ *   per worker thread (i.e. one per VEPAnnotator instance). This is exactly
+ *   what main.cpp does in its --fork N path by constructing one VEPAnnotator
+ *   per worker. A single shared manager called from multiple threads WILL
+ *   corrupt htslib state and is not supported.
+ *
+ *   If you ever need to share a single manager across threads, add a
+ *   per-source mutex inside annotate_all() gated on !is_thread_safe(),
+ *   or hold a unique (write) lock around the entire call.
  */
 class AnnotationSourceManager {
 public:

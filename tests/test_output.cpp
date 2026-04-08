@@ -292,6 +292,72 @@ TEST(FormatPosition, SameStartEnd) {
 
 
 // ============================================================================
+// Utility: sanitize_tsv
+// ============================================================================
+
+TEST(SanitizeTSV, LeavesCleanValueUnchanged) {
+    EXPECT_EQ(sanitize_tsv("HelloWorld"), "HelloWorld");
+    EXPECT_EQ(sanitize_tsv(""), "");
+    EXPECT_EQ(sanitize_tsv("p.His179Arg"), "p.His179Arg");
+}
+
+TEST(SanitizeTSV, ReplacesTab) {
+    EXPECT_EQ(sanitize_tsv("foo\tbar"), "foo bar");
+    EXPECT_EQ(sanitize_tsv("\t"), " ");
+    EXPECT_EQ(sanitize_tsv("\t\t\t"), "   ");
+}
+
+TEST(SanitizeTSV, ReplacesNewline) {
+    EXPECT_EQ(sanitize_tsv("line1\nline2"), "line1 line2");
+    EXPECT_EQ(sanitize_tsv("\n"), " ");
+}
+
+TEST(SanitizeTSV, ReplacesCarriageReturn) {
+    EXPECT_EQ(sanitize_tsv("foo\rbar"), "foo bar");
+    EXPECT_EQ(sanitize_tsv("a\r\nb"), "a  b");
+}
+
+TEST(SanitizeTSV, ReplacesMixedWhitespace) {
+    EXPECT_EQ(sanitize_tsv("a\tb\nc\rd"), "a b c d");
+}
+
+TEST(SanitizeTSV, WriteAnnotationDoesNotBreakColumnCount) {
+    VariantAnnotation ann = make_basic_annotation();
+    // Inject tab and newline characters into fields that originate from
+    // external annotation sources. A naive implementation would corrupt
+    // TSV column alignment.
+    ann.gene_symbol = "T\tP\n53";
+    ann.hgvsc = "ENST00000269305.9:c.535A>G\ttab";
+    ann.hgvsp = "ENSP\r00000269305.4:p.His179Arg";
+    ann.existing_variation = "rs\t28934576";
+    ann.custom_annotations["DUMMY_FIELD"] = "value\twith\ttabs\nand\nnewlines";
+
+    const std::string tmp_path = "/tmp/vep_sanitize_tsv_test.tsv";
+    {
+        TSVWriter writer(tmp_path, false);
+        writer.write_header({"DUMMY_FIELD"});
+        writer.write_annotation(ann, {"DUMMY_FIELD"});
+        writer.close();
+    }
+
+    std::ifstream in(tmp_path);
+    std::string line;
+    int data_line_count = 0;
+    int column_count = -1;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        int tabs = 0;
+        for (char c : line) if (c == '\t') tabs++;
+        if (column_count == -1) column_count = tabs;
+        EXPECT_EQ(tabs, column_count) << "Inconsistent column count: " << line;
+        data_line_count++;
+    }
+    EXPECT_EQ(data_line_count, 1) << "Expected exactly one data line; got " << data_line_count;
+    std::remove(tmp_path.c_str());
+}
+
+
+// ============================================================================
 // Utility: format_protein_position
 // ============================================================================
 

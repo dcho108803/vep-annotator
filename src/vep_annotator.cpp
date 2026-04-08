@@ -28,6 +28,12 @@
 
 namespace vep {
 
+// Upper bound on HGVS 3' shifting iterations. Variants whose shift window
+// exceeds this limit are left unshifted - a practical guard against runaway
+// loops on extreme tandem repeats. 1000 bp covers every realistic clinical
+// indel (actual shifts are typically 0-50 bp).
+static constexpr int MAX_SHIFT_ITERATIONS = 1000;
+
 // ============================================================================
 // Complement helper
 // ============================================================================
@@ -717,19 +723,25 @@ void VCFAnnotationDatabase::add_source(const VCFAnnotationConfig& config) {
     bool is_gzipped = (config.vcf_path.size() >= 3 &&
                        config.vcf_path.substr(config.vcf_path.size() - 3) == ".gz");
 
+    // RAII wrapper so gzclose is always called, even if parsing throws.
+    struct GzGuard {
+        gzFile gz = nullptr;
+        ~GzGuard() { if (gz) gzclose(gz); }
+    };
+    GzGuard gz_guard;
     std::function<bool(std::string&)> read_line;
-    gzFile gz = nullptr;
     std::ifstream file;
 
     if (is_gzipped) {
-        gz = gzopen(config.vcf_path.c_str(), "rb");
-        if (!gz) {
+        gz_guard.gz = gzopen(config.vcf_path.c_str(), "rb");
+        if (!gz_guard.gz) {
             throw std::runtime_error("Cannot open VCF file: " + config.vcf_path);
         }
 
-        char buffer[65536];
-        read_line = [&gz, &buffer](std::string& line) -> bool {
-            if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
+        static thread_local char buffer[65536];
+        gzFile gz_ref = gz_guard.gz;
+        read_line = [gz_ref](std::string& line) -> bool {
+            if (gzgets(gz_ref, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
                 line.pop_back();
@@ -803,7 +815,7 @@ void VCFAnnotationDatabase::add_source(const VCFAnnotationConfig& config) {
         }
     }
 
-    if (gz) gzclose(gz);
+    // gz handle freed by gz_guard on scope exit (RAII).
 
     pimpl_->record_counts[config.name] = record_count;
 
@@ -1003,8 +1015,13 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                        fasta_path.substr(fasta_path.size() - 3) == ".gz");
 
     if (is_gzipped) {
-        gzFile gz = gzopen(fasta_path.c_str(), "rb");
-        if (!gz) {
+        struct GzGuard {
+            gzFile gz = nullptr;
+            ~GzGuard() { if (gz) gzclose(gz); }
+        };
+        GzGuard g;
+        g.gz = gzopen(fasta_path.c_str(), "rb");
+        if (!g.gz) {
             throw std::runtime_error("Cannot open gzipped FASTA file: " + fasta_path);
         }
 
@@ -1012,7 +1029,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
         std::string current_seq;
         char buffer[8192];
 
-        while (gzgets(gz, buffer, sizeof(buffer)) != nullptr) {
+        while (gzgets(g.gz, buffer, sizeof(buffer)) != nullptr) {
             std::string line(buffer);
             // Remove trailing newline
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
@@ -1052,7 +1069,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
             pimpl_->sequences[current_chrom] = std::move(current_seq);
         }
 
-        gzclose(gz);
+        // gz is freed by GzGuard on scope exit.
     } else {
         std::ifstream file(fasta_path);
         if (!file.is_open()) {
@@ -1238,19 +1255,25 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
     bool is_gzipped = (gtf_path.size() >= 3 &&
                        gtf_path.substr(gtf_path.size() - 3) == ".gz");
 
+    // RAII wrapper so gzclose is always called, even if parsing throws below.
+    struct GzGuard {
+        gzFile gz = nullptr;
+        ~GzGuard() { if (gz) gzclose(gz); }
+    };
+    GzGuard gz_guard;
     std::function<bool(std::string&)> read_line;
-    gzFile gz = nullptr;
     std::ifstream file;
 
     if (is_gzipped) {
-        gz = gzopen(gtf_path.c_str(), "rb");
-        if (!gz) {
+        gz_guard.gz = gzopen(gtf_path.c_str(), "rb");
+        if (!gz_guard.gz) {
             throw std::runtime_error("Cannot open GTF file: " + gtf_path);
         }
 
-        char buffer[65536];
-        read_line = [&gz, &buffer](std::string& line) -> bool {
-            if (gzgets(gz, buffer, sizeof(buffer)) == nullptr) return false;
+        static thread_local char buffer[65536];
+        gzFile gz_ref = gz_guard.gz;
+        read_line = [gz_ref](std::string& line) -> bool {
+            if (gzgets(gz_ref, buffer, sizeof(buffer)) == nullptr) return false;
             line = buffer;
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
                 line.pop_back();
@@ -1467,7 +1490,7 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
         }
     }
 
-    if (gz) gzclose(gz);
+    // gz handle is freed by gz_guard on scope exit (RAII).
 
     // Sort exons and CDS regions by position
     for (auto& [tid, tr] : pimpl_->transcripts) {
@@ -2079,7 +2102,7 @@ void VEPAnnotator::annotate_coding_region(
             int cds_len = static_cast<int>(cached_cds.size());
             int indel_len = static_cast<int>(indel_bases.size());
             bool is_cds_insertion = (ref.length() < alt.length());
-            for (int i = 0; i < 1000; ++i) {
+            for (int i = 0; i < MAX_SHIFT_ITERATIONS; ++i) {
                 int check_idx = is_cds_insertion ? shift_pos : (shift_pos + indel_len - 1);
                 if (check_idx >= cds_len) break;
                 if (std::toupper(cached_cds[check_idx]) == std::toupper(indel_bases[0])) {
@@ -2138,7 +2161,7 @@ void VEPAnnotator::annotate_coding_region(
             int ref_len = static_cast<int>(ref.length());
             if (transcript.strand == '+') {
                 int cds_offset = cds_pos - 1;
-                if (cds_offset + ref_len <= static_cast<int>(cached_cds.length()))
+                if (cds_offset >= 0 && cds_offset + ref_len <= static_cast<int>(cached_cds.length()))
                     mut_cds = cached_cds.substr(0, cds_offset) + alt + cached_cds.substr(cds_offset + ref_len);
             } else {
                 std::string rc_alt = reverse_complement_sequence(alt);
@@ -2149,6 +2172,7 @@ void VEPAnnotator::annotate_coding_region(
 
             if (!mut_cds.empty()) {
                 int scan_start = (ann.protein_position - 1) * 3;
+                if (scan_start < 0) scan_start = 0;
                 int dist = 0;
                 for (int i = scan_start; i + 2 < static_cast<int>(mut_cds.length()); i += 3) {
                     dist++;
@@ -2161,6 +2185,14 @@ void VEPAnnotator::annotate_coding_region(
                 }
             }
         }
+    }
+
+    // Guard against empty amino-acid strings. The else branch above builds
+    // ref_aa_str/alt_aa_str from codon chunks of length 3; an asymmetric MNV
+    // that slips through (e.g. ref_codon.length() == 2, alt_codon.length() == 4)
+    // would leave one side empty and a blind ref_aa_str[0] access would be UB.
+    if (ref_aa_str.empty() || alt_aa_str.empty()) {
+        return;
     }
 
     ann.hgvsp = generate_hgvsp(
@@ -3855,7 +3887,7 @@ std::tuple<int, std::string, std::string> VEPAnnotator::right_normalize(
     int chrom_len = reference_->get_chromosome_length(chrom);
     int anchor_offset = static_cast<int>(shorter.length());
 
-    for (int i = 0; i < 1000; ++i) {
+    for (int i = 0; i < MAX_SHIFT_ITERATIONS; ++i) {
         // For deletions: check base after deleted region
         // For insertions: check base right after anchor (don't add indel length)
         int check_pos = shifted_pos + anchor_offset + (is_insertion ? 0 : static_cast<int>(shifted_indel.length()));

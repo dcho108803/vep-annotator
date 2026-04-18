@@ -4,7 +4,7 @@ A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VE
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![Tests](https://img.shields.io/badge/tests-1158%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1174%20passing-brightgreen.svg)]()
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ git clone https://github.com/dcho108803/vep-annotator.git
 cd vep-annotator && mkdir build && cd build
 cmake .. && make -j4
 
-# Run tests (1158 tests)
+# Run tests (1174 tests)
 ./vep_tests
 
 # Annotate a single variant
@@ -172,13 +172,13 @@ Use `--annotation-tabix` instead of `--annotation` for large VCF files to minimi
 
 ## Testing
 
-1158 GoogleTest unit tests across 11 test suites:
+1174 GoogleTest unit tests across 11 test suites:
 
 | Test Suite | Tests | Coverage |
 |------------|------:|----------|
 | Filter VEP | 206 | Operators, expressions, conditions, pipeline, edge cases |
 | Output Writers | 197 | TSV/JSON/VCF formatting, escaping, stats, position formatting |
-| CLI Utilities | 144 | Variant parsing, allele trimming, config parsing, format detection |
+| CLI Utilities | 160 | Variant parsing, allele trimming, config parsing/loading/merge, format detection |
 | Transcript Filter | 121 | Pick modes, filtering, ranking, APPRIS/TSL, complex scenarios |
 | HGVS | 90 | Parsing, HGVSg generation, SPDI, RefSeq mapping, edge cases |
 | Consequences | 84 | SO terms, impact levels, ranking, variant class, display terms |
@@ -187,7 +187,7 @@ Use `--annotation-tabix` instead of `--annotation` for large VCF files to minimi
 | Codon Table | 35 | Translation, MT codons, completeness, case handling, edge cases |
 | Exon/Intron Numbers | 25 | Position calculation, formatting |
 | SpliceAI | 12 | Score parsing, cutoffs, thread safety |
-| **Total** | **1158** | |
+| **Total** | **1174** | |
 
 ```bash
 cd build && ./vep_tests

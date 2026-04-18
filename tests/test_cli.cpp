@@ -15,6 +15,8 @@
 #include <tuple>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <fstream>
 #include "file_parsers.hpp"
 
 // ============================================================================
@@ -197,45 +199,83 @@ static void minimal_trim(std::string& ref, std::string& alt, int& pos) {
     if (alt.empty()) alt = "-";
 }
 
-// Config file line parsing (extracts key/value pairs from a single line)
+// Config file line parsing (mirrors parse_config_line in main.cpp).
+// "key = value" -> ["--key", "value"] (value keeps internal spaces, unwrapped if quoted)
+// "tok1 tok2 ..." -> first token prefixed with "--" if missing; rest kept as-is.
 static std::vector<std::string> parse_config_line(const std::string& raw_line) {
     std::vector<std::string> result;
-    std::string cfg_line = raw_line;
+    std::string line = raw_line;
 
-    // Strip comments
-    size_t hash = cfg_line.find('#');
-    if (hash != std::string::npos) cfg_line = cfg_line.substr(0, hash);
+    size_t hash = line.find('#');
+    if (hash != std::string::npos) line = line.substr(0, hash);
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front()))) line.erase(0, 1);
+    if (line.empty()) return result;
 
-    // Trim trailing whitespace
-    while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.back())))
-        cfg_line.pop_back();
-    // Trim leading whitespace
-    while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.front())))
-        cfg_line.erase(0, 1);
-
-    if (cfg_line.empty()) return result;
-
-    // Parse "key = value" or "key value" format
-    size_t eq = cfg_line.find('=');
+    size_t eq = line.find('=');
     if (eq != std::string::npos) {
-        std::string key = cfg_line.substr(0, eq);
-        std::string val = cfg_line.substr(eq + 1);
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
         while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
         while (!val.empty() && std::isspace(static_cast<unsigned char>(val.front()))) val.erase(0, 1);
-        if (!key.empty()) {
-            if (key[0] != '-') key = "--" + key;
-            result.push_back(key);
-            if (!val.empty()) result.push_back(val);
+        while (!val.empty() && std::isspace(static_cast<unsigned char>(val.back()))) val.pop_back();
+        if (key.empty()) return result;
+        if (key[0] != '-') key = "--" + key;
+        result.push_back(std::move(key));
+        if (!val.empty()) {
+            if (val.size() >= 2 && (val.front() == '"' || val.front() == '\'') && val.back() == val.front())
+                val = val.substr(1, val.size() - 2);
+            result.push_back(std::move(val));
         }
     } else {
-        std::istringstream cfg_iss(cfg_line);
-        std::string token;
-        while (cfg_iss >> token) {
-            result.push_back(token);
+        std::istringstream iss(line);
+        std::string tok;
+        bool first = true;
+        while (iss >> tok) {
+            if (first && !tok.empty() && tok[0] != '-') tok = "--" + tok;
+            result.push_back(std::move(tok));
+            first = false;
         }
     }
-
     return result;
+}
+
+// Mirrors load_config_tokens in main.cpp: reads a file and flattens each
+// line's tokens in order, skipping empty/comment lines and any nested --config.
+static std::vector<std::string> load_config_tokens_from_string(const std::string& contents) {
+    std::vector<std::string> tokens;
+    std::istringstream in(contents);
+    std::string line;
+    while (std::getline(in, line)) {
+        auto line_tokens = parse_config_line(line);
+        if (line_tokens.empty()) continue;
+        if (line_tokens[0] == "--config") continue;
+        for (auto& t : line_tokens) tokens.push_back(std::move(t));
+    }
+    return tokens;
+}
+
+// Write contents to a temp file, run the file-path variant, then remove it.
+// Returns the tokens loaded. Returns {} if the file cannot be opened.
+static std::vector<std::string> load_config_tokens_via_file(const std::string& contents) {
+    std::string path = "/tmp/vep_cfg_test_" + std::to_string(std::rand()) + ".ini";
+    {
+        std::ofstream out(path);
+        out << contents;
+    }
+    std::vector<std::string> tokens;
+    std::ifstream in(path);
+    if (in.is_open()) {
+        std::string line;
+        while (std::getline(in, line)) {
+            auto line_tokens = parse_config_line(line);
+            if (line_tokens.empty()) continue;
+            if (line_tokens[0] == "--config") continue;
+            for (auto& t : line_tokens) tokens.push_back(std::move(t));
+        }
+    }
+    std::remove(path.c_str());
+    return tokens;
 }
 
 // Chromosome filter parsing: parse comma-separated list and insert both forms
@@ -834,6 +874,194 @@ TEST(ConfigParsing, MultipleSpaceSeparatedTokens) {
     EXPECT_EQ(args[0], "--pick");
     EXPECT_EQ(args[1], "--canonical");
     EXPECT_EQ(args[2], "--coding-only");
+}
+
+TEST(ConfigParsing, DoubleQuotedValue) {
+    auto args = parse_config_line("output = \"my file.tsv\"");
+    ASSERT_EQ(args.size(), 2u);
+    EXPECT_EQ(args[0], "--output");
+    EXPECT_EQ(args[1], "my file.tsv");
+}
+
+TEST(ConfigParsing, SingleQuotedValue) {
+    auto args = parse_config_line("output='a b.tsv'");
+    ASSERT_EQ(args.size(), 2u);
+    EXPECT_EQ(args[0], "--output");
+    EXPECT_EQ(args[1], "a b.tsv");
+}
+
+TEST(ConfigParsing, UnbalancedQuotesArePreserved) {
+    // A single stray quote should not be stripped — we only unwrap matched pairs.
+    auto args = parse_config_line("x = \"oops");
+    ASSERT_EQ(args.size(), 2u);
+    EXPECT_EQ(args[0], "--x");
+    EXPECT_EQ(args[1], "\"oops");
+}
+
+TEST(ConfigParsing, EqualsValueWithInternalSpaces) {
+    // "=" form keeps value intact — spaces inside value are preserved.
+    auto args = parse_config_line("custom = myfile.vcf,MyLabel,vcf,exact,1,Field1,Field2");
+    ASSERT_EQ(args.size(), 2u);
+    EXPECT_EQ(args[0], "--custom");
+    EXPECT_EQ(args[1], "myfile.vcf,MyLabel,vcf,exact,1,Field1,Field2");
+}
+
+TEST(ConfigParsing, EqualsEmptyKeyIgnored) {
+    auto args = parse_config_line("= orphan");
+    EXPECT_TRUE(args.empty());
+}
+
+TEST(ConfigParsing, TabSeparatedFormat) {
+    auto args = parse_config_line("--gtf\t/path/to/file.gtf");
+    ASSERT_EQ(args.size(), 2u);
+    EXPECT_EQ(args[0], "--gtf");
+    EXPECT_EQ(args[1], "/path/to/file.gtf");
+}
+
+// ============================================================================
+// Test Suite: Config file token loader (multi-line)
+// ============================================================================
+
+TEST(ConfigLoader, BasicMultiLine) {
+    std::string file =
+        "# VEP config\n"
+        "gtf = genes.gtf\n"
+        "fasta = genome.fa\n"
+        "pick\n";
+    auto tokens = load_config_tokens_from_string(file);
+    ASSERT_EQ(tokens.size(), 5u);
+    EXPECT_EQ(tokens[0], "--gtf");
+    EXPECT_EQ(tokens[1], "genes.gtf");
+    EXPECT_EQ(tokens[2], "--fasta");
+    EXPECT_EQ(tokens[3], "genome.fa");
+    EXPECT_EQ(tokens[4], "--pick");
+}
+
+TEST(ConfigLoader, SkipsBlankAndCommentLines) {
+    std::string file =
+        "\n"
+        "# comment\n"
+        "   \n"
+        "gtf = g.gtf\n"
+        "   # indented comment\n"
+        "fasta = f.fa\n";
+    auto tokens = load_config_tokens_from_string(file);
+    ASSERT_EQ(tokens.size(), 4u);
+    EXPECT_EQ(tokens[0], "--gtf");
+    EXPECT_EQ(tokens[1], "g.gtf");
+    EXPECT_EQ(tokens[2], "--fasta");
+    EXPECT_EQ(tokens[3], "f.fa");
+}
+
+TEST(ConfigLoader, NestedConfigIsIgnored) {
+    // Prevents recursive --config expansion.
+    std::string file =
+        "gtf = g.gtf\n"
+        "config = other.ini\n"
+        "--config also_ignored.ini\n"
+        "fasta = f.fa\n";
+    auto tokens = load_config_tokens_from_string(file);
+    ASSERT_EQ(tokens.size(), 4u);
+    EXPECT_EQ(tokens[0], "--gtf");
+    EXPECT_EQ(tokens[1], "g.gtf");
+    EXPECT_EQ(tokens[2], "--fasta");
+    EXPECT_EQ(tokens[3], "f.fa");
+}
+
+TEST(ConfigLoader, MixedFormatsInSameFile) {
+    std::string file =
+        "--gtf g.gtf\n"
+        "fasta = f.fa\n"
+        "--pick --canonical\n"
+        "output=out.tsv  # trailing comment\n";
+    auto tokens = load_config_tokens_from_string(file);
+    ASSERT_EQ(tokens.size(), 8u);
+    EXPECT_EQ(tokens[0], "--gtf");
+    EXPECT_EQ(tokens[1], "g.gtf");
+    EXPECT_EQ(tokens[2], "--fasta");
+    EXPECT_EQ(tokens[3], "f.fa");
+    EXPECT_EQ(tokens[4], "--pick");
+    EXPECT_EQ(tokens[5], "--canonical");
+    EXPECT_EQ(tokens[6], "--output");
+    EXPECT_EQ(tokens[7], "out.tsv");
+}
+
+TEST(ConfigLoader, EmptyFileReturnsEmpty) {
+    auto tokens = load_config_tokens_from_string("");
+    EXPECT_TRUE(tokens.empty());
+}
+
+TEST(ConfigLoader, OnlyCommentsReturnsEmpty) {
+    std::string file = "# a\n# b\n\n# c\n";
+    auto tokens = load_config_tokens_from_string(file);
+    EXPECT_TRUE(tokens.empty());
+}
+
+TEST(ConfigLoader, QuotedPathWithSpaces) {
+    std::string file = "gtf = \"/my path/genes.gtf\"\n";
+    auto tokens = load_config_tokens_from_string(file);
+    ASSERT_EQ(tokens.size(), 2u);
+    EXPECT_EQ(tokens[0], "--gtf");
+    EXPECT_EQ(tokens[1], "/my path/genes.gtf");
+}
+
+TEST(ConfigLoader, RoundTripThroughTempFile) {
+    // Verifies ifstream + getline loop matches the in-memory implementation.
+    std::string contents =
+        "# real file round-trip\n"
+        "gtf = real.gtf\n"
+        "fasta = real.fa\n"
+        "pick\n";
+    auto file_tokens = load_config_tokens_via_file(contents);
+    auto mem_tokens = load_config_tokens_from_string(contents);
+    EXPECT_EQ(file_tokens, mem_tokens);
+    ASSERT_EQ(file_tokens.size(), 5u);
+    EXPECT_EQ(file_tokens[0], "--gtf");
+    EXPECT_EQ(file_tokens[4], "--pick");
+}
+
+// ============================================================================
+// Test Suite: Config-then-CLI merge ordering
+// ============================================================================
+
+// Mimics the merge: config tokens first, then argv[1..argc-1]. A later
+// argv loop uses last-write-wins for scalar flags, so CLI overrides config.
+static std::vector<std::string> merge_config_then_cli(
+        const std::vector<std::string>& cfg,
+        const std::vector<std::string>& cli) {
+    std::vector<std::string> out;
+    out.reserve(cfg.size() + cli.size());
+    for (const auto& t : cfg) out.push_back(t);
+    for (const auto& t : cli) out.push_back(t);
+    return out;
+}
+
+TEST(ConfigMerge, ConfigBeforeCli) {
+    auto merged = merge_config_then_cli({"--gtf", "from_config.gtf"},
+                                        {"--fasta", "from_cli.fa"});
+    ASSERT_EQ(merged.size(), 4u);
+    EXPECT_EQ(merged[0], "--gtf");
+    EXPECT_EQ(merged[1], "from_config.gtf");
+    EXPECT_EQ(merged[2], "--fasta");
+    EXPECT_EQ(merged[3], "from_cli.fa");
+}
+
+TEST(ConfigMerge, CliAppearsAfterConfigForOverride) {
+    // With config-first ordering, if the parser assigns last-write-wins,
+    // the CLI occurrence of --gtf should be processed after and thus win.
+    auto merged = merge_config_then_cli({"--gtf", "from_config.gtf"},
+                                        {"--gtf", "from_cli.gtf"});
+    ASSERT_EQ(merged.size(), 4u);
+    EXPECT_EQ(merged[0], "--gtf");
+    EXPECT_EQ(merged[1], "from_config.gtf");
+    EXPECT_EQ(merged[2], "--gtf");
+    EXPECT_EQ(merged[3], "from_cli.gtf");
+    // Simulate a simple last-wins resolver:
+    std::string gtf_final;
+    for (size_t i = 0; i + 1 < merged.size(); ++i) {
+        if (merged[i] == "--gtf") gtf_final = merged[i + 1];
+    }
+    EXPECT_EQ(gtf_final, "from_cli.gtf");
 }
 
 // ============================================================================

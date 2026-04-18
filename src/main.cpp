@@ -658,6 +658,71 @@ std::string gz_read_line(gzFile gz, bool& eof) {
     return result;
 }
 
+// Parse a single config-file line into argv-style tokens.
+// Two formats:
+//   "key = value"  -> ["--key", "value"]  (single key/value, preserves spaces in value)
+//   "tok1 tok2 .." -> ["--tok1", "tok2", ...]  (whitespace-split, first gets "--" prefix)
+// Returns {} for empty/comment lines. Quoted values ('...' or "...") are unwrapped
+// in the "=" form.
+static std::vector<std::string> parse_config_line(const std::string& raw_line) {
+    std::vector<std::string> result;
+    std::string line = raw_line;
+
+    size_t hash = line.find('#');
+    if (hash != std::string::npos) line = line.substr(0, hash);
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front()))) line.erase(0, 1);
+    if (line.empty()) return result;
+
+    size_t eq = line.find('=');
+    if (eq != std::string::npos) {
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
+        while (!val.empty() && std::isspace(static_cast<unsigned char>(val.front()))) val.erase(0, 1);
+        while (!val.empty() && std::isspace(static_cast<unsigned char>(val.back()))) val.pop_back();
+        if (key.empty()) return result;
+        if (key[0] != '-') key = "--" + key;
+        result.push_back(std::move(key));
+        if (!val.empty()) {
+            if (val.size() >= 2 && (val.front() == '"' || val.front() == '\'') && val.back() == val.front())
+                val = val.substr(1, val.size() - 2);
+            result.push_back(std::move(val));
+        }
+    } else {
+        std::istringstream iss(line);
+        std::string tok;
+        bool first = true;
+        while (iss >> tok) {
+            if (first && !tok.empty() && tok[0] != '-') tok = "--" + tok;
+            result.push_back(std::move(tok));
+            first = false;
+        }
+    }
+    return result;
+}
+
+// Read a config file and return its contents as a flat argv-style token list.
+// Order follows file order. Config tokens should be prepended to argv so that
+// real command-line args (processed later) win via last-write semantics.
+// The "--config" key inside a config file is ignored to prevent recursion.
+static std::vector<std::string> load_config_tokens(const std::string& path, std::ostream& err) {
+    std::vector<std::string> tokens;
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        err << "Warning: Cannot open config file: " << path << std::endl;
+        return tokens;
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        auto line_tokens = parse_config_line(line);
+        if (line_tokens.empty()) continue;
+        if (line_tokens[0] == "--config") continue;  // ignore nested config
+        for (auto& t : line_tokens) tokens.push_back(std::move(t));
+    }
+    return tokens;
+}
+
 int main(int argc, char* argv[]) {
     // Basic options
     std::string gtf_path;
@@ -835,6 +900,38 @@ int main(int argc, char* argv[]) {
     bool show_af_gnomade = false;        // --af_gnomade
     bool show_af_gnomadg = false;        // --af_gnomadg
     bool show_af_esp = false;            // --af_esp
+
+    // Pre-scan for --config FILE so config tokens can be prepended to argv.
+    // CLI args come later in the merged list and thus override config (last-write wins
+    // for scalar flags; list flags like --custom / --plugin are concatenated).
+    std::string pre_config_path;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--config" && i + 1 < argc) {
+            pre_config_path = argv[i + 1];
+            break;
+        }
+    }
+
+    std::vector<std::string> merged_arg_storage;
+    std::vector<char*> merged_argv_vec;
+    if (!pre_config_path.empty()) {
+        std::vector<std::string> cfg_tokens = load_config_tokens(pre_config_path, std::cerr);
+        if (!cfg_tokens.empty()) {
+            merged_arg_storage.reserve(1 + cfg_tokens.size() + static_cast<size_t>(argc - 1));
+            merged_arg_storage.emplace_back(argv[0]);
+            for (auto& t : cfg_tokens) merged_arg_storage.push_back(std::move(t));
+            for (int i = 1; i < argc; ++i) merged_arg_storage.emplace_back(argv[i]);
+
+            merged_argv_vec.reserve(merged_arg_storage.size());
+            for (auto& s : merged_arg_storage) merged_argv_vec.push_back(s.data());
+
+            argc = static_cast<int>(merged_argv_vec.size());
+            argv = merged_argv_vec.data();
+            std::cerr << "Loaded config: " << pre_config_path
+                      << " (" << cfg_tokens.size() << " tokens)" << std::endl;
+        }
+    }
 
     // Parse command line arguments
     for (int i = 1; i < argc; ++i) {
@@ -1585,49 +1682,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Load config file if specified (applies settings as defaults)
-    if (!config_file_path.empty()) {
-        std::ifstream config_in(config_file_path);
-        if (config_in.is_open()) {
-            std::string cfg_line;
-            std::vector<std::string> config_args;
-            while (std::getline(config_in, cfg_line)) {
-                // Strip comments and whitespace
-                size_t hash = cfg_line.find('#');
-                if (hash != std::string::npos) cfg_line = cfg_line.substr(0, hash);
-                while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.back()))) cfg_line.pop_back();
-                while (!cfg_line.empty() && std::isspace(static_cast<unsigned char>(cfg_line.front()))) cfg_line.erase(0, 1);
-                if (cfg_line.empty()) continue;
-
-                // Parse "key = value" or "key value" format
-                size_t eq = cfg_line.find('=');
-                if (eq != std::string::npos) {
-                    std::string key = cfg_line.substr(0, eq);
-                    std::string val = cfg_line.substr(eq + 1);
-                    while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
-                    while (!val.empty() && std::isspace(static_cast<unsigned char>(val.front()))) val.erase(0, 1);
-                    if (!key.empty()) {
-                        if (key[0] != '-') key = "--" + key;
-                        config_args.push_back(key);
-                        if (!val.empty()) config_args.push_back(val);
-                    }
-                } else {
-                    std::istringstream cfg_iss(cfg_line);
-                    std::string token;
-                    while (cfg_iss >> token) {
-                        config_args.push_back(token);
-                    }
-                }
-            }
-            if (!config_args.empty()) {
-                std::cerr << "Warning: --config parsed " << config_args.size() << " options from " << config_file_path
-                          << " but they are NOT applied. Config file support is not yet implemented. "
-                          << "Please specify all options as command-line flags instead." << std::endl;
-            }
-        } else {
-            std::cerr << "Warning: Cannot open config file: " << config_file_path << std::endl;
-        }
-    }
+    // --config is handled in the pre-scan before the argv loop (config tokens
+    // are prepended to argv so CLI args override them). Nothing to do here.
 
     // Load chromosome synonyms file
     if (!synonyms_path.empty()) {

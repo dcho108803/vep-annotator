@@ -529,7 +529,7 @@ This C++ implementation uses **local files exclusively** (GTF + FASTA) rather th
 | `--fork N` | Perl `fork()` processes | C++ `std::thread` + work-stealing |
 | `--minimal` VCF output | Preserves original alleles | Writes minimized alleles |
 | Plugin system | Perl plugin ecosystem | C++ shared libraries (`.so`/`.dylib`) |
-| `filter_vep` regex | Full Perl regex | Substring matching (`string::find`) |
+| `filter_vep` regex | Full Perl regex | `std::regex_search` (ECMAScript flavor) |
 | HGVS multi-base duplications | Full `dup` notation | May use `ins` instead of `dup` |
 
 </details>

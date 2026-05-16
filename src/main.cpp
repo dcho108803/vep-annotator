@@ -2208,47 +2208,74 @@ int main(int argc, char* argv[]) {
                 return *thread_annotators[thread_idx - 1];
             };
 
-            // Pre-buffer input and parallel pre-annotation for --fork N
+            // Pre-buffer input and parallel pre-annotation for --fork N (chunked
+            // to bound memory: full-file buffering OOMs on large WGS VCFs).
             std::vector<std::string> buffered_lines;
             std::unordered_map<std::string, std::vector<vep::VariantAnnotation>> annotation_cache;
             size_t buffered_line_idx = 0;
+            size_t pre_read_idx = 0;
+            const bool fork_mode = (fork_count > 1);
+            const size_t FORK_CHUNK_SIZE = 10000;  // lines per chunk
+            bool fork_input_eof = false;
+            size_t fork_total_cached = 0;
 
-            if (fork_count > 1) {
-                // Phase 1: Read ALL input lines into memory
-                for (auto& prl : pre_read_lines) {
-                    buffered_lines.push_back(std::move(prl));
+            const bool need_all_ann = all_transcripts ||
+                filter_config.pick || filter_config.pick_allele ||
+                filter_config.pick_allele_gene || filter_config.per_gene ||
+                filter_config.flag_pick || filter_config.flag_pick_allele ||
+                filter_config.flag_pick_allele_gene ||
+                filter_config.most_severe ||
+                filter_config.coding_only || filter_config.canonical_only ||
+                filter_config.mane_only || filter_config.gencode_basic ||
+                filter_config.no_intergenic ||
+                filter_config.exclude_predicted ||
+                !filter_config.include_consequences.empty() ||
+                !filter_config.exclude_consequences.empty();
+
+            // Read one line from the active input source (returns false on EOF).
+            auto fork_read_next_input = [&](std::string& dest) -> bool {
+                if (use_stdin) {
+                    if (!read_stdin_line(dest)) return false;
+                    while (!dest.empty() && dest.back() == '\r') dest.pop_back();
+                    return true;
+                } else if (is_gzipped) {
+                    bool gz_eof = false;
+                    dest = gz_read_line(gz_file, gz_eof);
+                    if (gz_eof) return false;
+                    return true;
+                } else {
+                    if (!std::getline(plain_file, dest)) return false;
+                    while (!dest.empty() && dest.back() == '\r') dest.pop_back();
+                    return true;
                 }
-                pre_read_lines.clear();
+            };
 
-                while (true) {
+            // Refill a single chunk of buffered_lines + annotation_cache. Reads
+            // up to FORK_CHUNK_SIZE lines, deduplicates them into unique
+            // annotation queries, and runs parallel pre-annotation across N
+            // threads. Returns false when input is fully drained.
+            auto refill_fork_chunk = [&]() -> bool {
+                buffered_lines.clear();
+                annotation_cache.clear();
+                buffered_line_idx = 0;
+                if (fork_input_eof && pre_read_idx >= pre_read_lines.size()) return false;
+
+                // Drain any leftover pre_read_lines first
+                while (pre_read_idx < pre_read_lines.size() &&
+                       buffered_lines.size() < FORK_CHUNK_SIZE) {
+                    buffered_lines.push_back(std::move(pre_read_lines[pre_read_idx++]));
+                }
+                // Fill remainder from input source
+                while (buffered_lines.size() < FORK_CHUNK_SIZE && !fork_input_eof) {
                     std::string buf_line;
-                    if (use_stdin) {
-                        if (!read_stdin_line(buf_line)) break;
-                        while (!buf_line.empty() && buf_line.back() == '\r') buf_line.pop_back();
-                    } else if (is_gzipped) {
-                        bool gz_eof = false;
-                        buf_line = gz_read_line(gz_file, gz_eof);
-                        if (gz_eof) break;
-                    } else {
-                        if (!std::getline(plain_file, buf_line)) break;
-                        while (!buf_line.empty() && buf_line.back() == '\r') buf_line.pop_back();
+                    if (!fork_read_next_input(buf_line)) {
+                        fork_input_eof = true;
+                        break;
                     }
                     buffered_lines.push_back(std::move(buf_line));
                 }
 
-                // Phase 2: Quick-parse VCF lines to collect unique annotation queries
-                bool need_all_ann = all_transcripts ||
-                    filter_config.pick || filter_config.pick_allele ||
-                    filter_config.pick_allele_gene || filter_config.per_gene ||
-                    filter_config.flag_pick || filter_config.flag_pick_allele ||
-                    filter_config.flag_pick_allele_gene ||
-                    filter_config.most_severe ||
-                    filter_config.coding_only || filter_config.canonical_only ||
-                    filter_config.mane_only || filter_config.gencode_basic ||
-                    filter_config.no_intergenic ||
-                    filter_config.exclude_predicted ||
-                    !filter_config.include_consequences.empty() ||
-                    !filter_config.exclude_consequences.empty();
+                if (buffered_lines.empty()) return false;
 
                 struct AnnotQuery {
                     std::string key;
@@ -2328,61 +2355,60 @@ int main(int argc, char* argv[]) {
                     }
                 }
 
-                // Phase 3: Parallel annotation using N threads with work-stealing
-                if (!queries.empty()) {
-                    if (!quiet_mode) {
-                        std::cerr << "Pre-annotating " << queries.size() << " unique variants across "
-                                  << fork_count << " threads..." << std::endl;
-                    }
+                if (queries.empty()) return true;
 
-                    std::vector<std::vector<vep::VariantAnnotation>> results(queries.size());
-                    std::atomic<size_t> work_idx(0);
-                    std::vector<std::thread> workers;
+                std::vector<std::vector<vep::VariantAnnotation>> results(queries.size());
+                std::atomic<size_t> work_idx(0);
+                std::vector<std::thread> workers;
+                std::vector<std::exception_ptr> thread_exceptions(fork_count);
 
-                    std::vector<std::exception_ptr> thread_exceptions(fork_count);
-
-                    for (int t = 0; t < fork_count; t++) {
-                        workers.emplace_back([&, t, need_all_ann]() {
-                            try {
-                                auto& ann = get_annotator(t);
-                                size_t i;
-                                while ((i = work_idx.fetch_add(1)) < queries.size()) {
-                                    auto& q = queries[i];
-                                    if (need_all_ann)
-                                        results[i] = ann.annotate(q.chrom, q.pos, q.ref, q.alt);
-                                    else {
-                                        results[i].push_back(
-                                            ann.annotate_most_severe(q.chrom, q.pos, q.ref, q.alt));
-                                    }
+                for (int t = 0; t < fork_count; t++) {
+                    workers.emplace_back([&, t]() {
+                        try {
+                            auto& ann = get_annotator(t);
+                            size_t i;
+                            while ((i = work_idx.fetch_add(1)) < queries.size()) {
+                                auto& q = queries[i];
+                                if (need_all_ann)
+                                    results[i] = ann.annotate(q.chrom, q.pos, q.ref, q.alt);
+                                else {
+                                    results[i].push_back(
+                                        ann.annotate_most_severe(q.chrom, q.pos, q.ref, q.alt));
                                 }
-                            } catch (...) {
-                                thread_exceptions[t] = std::current_exception();
                             }
-                        });
-                    }
+                        } catch (...) {
+                            thread_exceptions[t] = std::current_exception();
+                        }
+                    });
+                }
 
-                    for (auto& w : workers) w.join();
+                for (auto& w : workers) w.join();
 
-                    // Rethrow the first thread exception, if any
-                    for (int t = 0; t < fork_count; t++) {
-                        if (thread_exceptions[t]) {
-                            try {
-                                std::rethrow_exception(thread_exceptions[t]);
-                            } catch (const std::exception& e) {
-                                vep::log(vep::LogLevel::ERROR, "Thread " + std::to_string(t) + " failed: " + e.what());
-                            }
+                for (int t = 0; t < fork_count; t++) {
+                    if (thread_exceptions[t]) {
+                        try {
+                            std::rethrow_exception(thread_exceptions[t]);
+                        } catch (const std::exception& e) {
+                            vep::log(vep::LogLevel::ERROR,
+                                "Thread " + std::to_string(t) + " failed: " + e.what());
                         }
                     }
+                }
 
-                    // Store results in cache
-                    for (size_t i = 0; i < queries.size(); i++) {
-                        annotation_cache[queries[i].key] = std::move(results[i]);
-                    }
+                for (size_t i = 0; i < queries.size(); i++) {
+                    annotation_cache[queries[i].key] = std::move(results[i]);
+                }
+                fork_total_cached += queries.size();
+                return true;
+            };
 
-                    if (!quiet_mode) {
-                        std::cerr << "Pre-annotation complete. " << queries.size()
-                                  << " variants cached." << std::endl;
-                    }
+            if (fork_mode) {
+                if (!quiet_mode) {
+                    std::cerr << "Pre-annotating in chunks of " << FORK_CHUNK_SIZE
+                              << " lines across " << fork_count << " threads..." << std::endl;
+                }
+                if (!refill_fork_chunk()) {
+                    // Empty input or header-only; cache stays empty, consumer loop will exit.
                 }
             }
 
@@ -2390,14 +2416,14 @@ int main(int argc, char* argv[]) {
             int variant_count = 0;
             InputFormat detected_format = InputFormat::UNKNOWN;
 
-            // Process pre-read lines first (from header pre-reading phase)
-            size_t pre_read_idx = 0;
-
             while (true) {
                 // Read next line (buffered for --fork, pre-read, or from file)
-                if (!buffered_lines.empty()) {
-                    if (buffered_line_idx >= buffered_lines.size()) break;
-                    line = buffered_lines[buffered_line_idx++];
+                if (fork_mode) {
+                    if (buffered_line_idx >= buffered_lines.size()) {
+                        if (!refill_fork_chunk()) break;
+                        if (buffered_lines.empty()) break;
+                    }
+                    line = std::move(buffered_lines[buffered_line_idx++]);
                 } else if (pre_read_idx < pre_read_lines.size()) {
                     line = pre_read_lines[pre_read_idx++];
                 } else if (use_stdin) {

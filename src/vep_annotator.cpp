@@ -2926,7 +2926,13 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 int incomplete_start = cds_length - (cds_length % 3) + 1;
                 if (cds_pos >= incomplete_start) {
                     consequences.push_back(ConsequenceType::INCOMPLETE_TERMINAL_CODON_VARIANT);
-                    return consequences;  // No further coding consequence for incomplete terminal codon
+                    // Length-preserving variants entirely inside the incomplete codon
+                    // have no further determinable coding consequence. Indels fall
+                    // through so co-occurring frameshift / start_lost / stop_lost
+                    // are also attached.
+                    if (ref.length() == alt.length()) {
+                        return consequences;
+                    }
                 }
             }
 

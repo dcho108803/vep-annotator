@@ -72,6 +72,7 @@ public:
         std::set<std::string> types;
         std::vector<std::string> ids;
         std::vector<std::string> names;
+        int matched_count = 0;  // every overlapping feature, incl. those with no ID
 
         for (const auto* feature : features) {
             // If cell types are specified, filter by cell_type attribute
@@ -102,6 +103,7 @@ public:
             }
 
             types.insert(feature->type);
+            ++matched_count;
             if (!feature->id.empty()) {
                 ids.push_back(feature->id);
             }
@@ -132,7 +134,7 @@ public:
             annotations["regulatory:feature_id"] = oss.str();
         }
 
-        annotations["regulatory:count"] = std::to_string(ids.size());
+        annotations["regulatory:count"] = std::to_string(matched_count);
 
         // Add specific feature type flags
         if (types.count("promoter") || types.count("Promoter")) {

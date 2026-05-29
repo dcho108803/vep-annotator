@@ -209,6 +209,7 @@ public:
         } else if (compress_ || ends_with_gz(output_path_)) {
             compress_ = true;
             gz_file_ = gzopen(output_path_.c_str(), "wb");
+            if (gz_file_) gzbuffer(gz_file_, 1 << 17);  // 128KB: fewer per-record deflate calls
             if (!gz_file_) {
                 throw std::runtime_error("Cannot open output file: " + output_path_);
             }
@@ -459,6 +460,7 @@ public:
         } else if (compress_ || ends_with_gz(output_path_)) {
             compress_ = true;
             gz_file_ = gzopen(output_path_.c_str(), "wb");
+            if (gz_file_) gzbuffer(gz_file_, 1 << 17);  // 128KB: fewer per-record deflate calls
             if (!gz_file_) {
                 throw std::runtime_error("Cannot open output file: " + output_path_);
             }
@@ -510,6 +512,10 @@ public:
     }
 
     void close() override {
+        // Emit any buffered final variant, mirroring VCFWriter::close(). Without
+        // this, closing the writer without write_footer() (e.g. during exception
+        // unwinding) would silently drop the last variant. flush is idempotent.
+        flush_current_variant();
         if (gz_file_) {
             int ret = gzclose(gz_file_);
             gz_file_ = nullptr;
@@ -626,8 +632,12 @@ private:
                 json << "      \"seq_region_name\": \"" << escape_json(first.chromosome) << "\",\n";
                 json << "      \"start\": " << first.position << ",\n";
                 json << "      \"end\": " << end_pos << ",\n";
-                json << "      \"allele_string\": \"" << escape_json(first.ref_allele) << "/"
-                     << escape_json(first.alt_allele) << "\",\n";
+                // Match Ensembl format and the top-level allele_string: empty
+                // ref/alt (indels) is rendered as '-', not an empty string.
+                std::string cv_ref = first.ref_allele.empty() ? "-" : first.ref_allele;
+                std::string cv_alt = first.alt_allele.empty() ? "-" : first.alt_allele;
+                json << "      \"allele_string\": \"" << escape_json(cv_ref) << "/"
+                     << escape_json(cv_alt) << "\",\n";
                 json << "      \"strand\": 1";
                 // CLIN_SIG on first variant if available
                 if (ci == 0) {
@@ -781,7 +791,12 @@ private:
         current_variant_key_.clear();
     }
 
-    void write_transcript_consequence(std::ostringstream& json, const VariantAnnotation& ann) {
+    void write_transcript_consequence(std::ostringstream& out, const VariantAnnotation& ann) {
+        // Build this transcript's object into a LOCAL buffer, then append it to
+        // `out` once. Previously the trailing-comma fixup did json.str() on the
+        // shared variant-level buffer per transcript, which is O(n^2) in emitted
+        // bytes for variants overlapping many isoforms.
+        std::ostringstream json;
         json << "      {\n";
         json << "        \"gene_id\": \"" << escape_json(ann.gene_id) << "\",\n";
         json << "        \"gene_symbol\": \"" << escape_json(ann.gene_symbol) << "\",\n";
@@ -1007,22 +1022,30 @@ private:
             // Fields already on the VariantAnnotation struct (would be duplicated)
             "CANONICAL", "BIOTYPE", "STRAND", "_consequences"
         };
-        for (const auto& pair : ann.custom_annotations) {
-            if (skip_custom.count(pair.first) || pair.first.substr(0, 11) == "_colocated:") continue;
-            if (!pair.second.empty()) {
-                // Perl VEP lowercases all JSON keys
+        // Collect remaining custom fields into an ordered, lowercased-key list so
+        // JSON output is deterministic (unordered_map iteration order is not) and
+        // case-collisions (e.g. "AF" vs "af") do not emit two members with the same
+        // name (which silently drops data and is non-reproducible).
+        {
+            std::map<std::string, std::string> ordered;  // lowercased key -> value
+            for (const auto& pair : ann.custom_annotations) {
+                if (skip_custom.count(pair.first) || pair.first.substr(0, 11) == "_colocated:") continue;
+                if (pair.second.empty()) continue;
                 std::string key = pair.first;
                 for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                // Try to output numeric values as numbers
-                if (is_valid_json_number(pair.second)) {
-                    json << "        \"" << escape_json(key) << "\": " << pair.second << ",\n";
+                ordered.emplace(std::move(key), pair.second);  // first wins on collision
+            }
+            for (const auto& kv : ordered) {
+                if (is_valid_json_number(kv.second)) {
+                    json << "        \"" << escape_json(kv.first) << "\": " << kv.second << ",\n";
                 } else {
-                    json << "        \"" << escape_json(key) << "\": \"" << escape_json(pair.second) << "\",\n";
+                    json << "        \"" << escape_json(kv.first) << "\": \"" << escape_json(kv.second) << "\",\n";
                 }
             }
         }
 
-        // Remove trailing comma from last field and close object
+        // Remove trailing comma from last field and close object (local buffer is
+        // this object only, so str() is O(object size), not O(accumulated bytes)).
         {
             std::string s = json.str();
             if (s.size() >= 2 && s.back() == '\n' && s[s.size()-2] == ',') {
@@ -1033,6 +1056,7 @@ private:
             json.seekp(0, std::ios_base::end);
         }
         json << "      }";
+        out << json.str();
     }
 
     void write_string(const std::string& s) {
@@ -1055,6 +1079,11 @@ private:
         size_t i = 0;
         if (s[i] == '-') { ++i; if (i >= s.size()) return false; }
         if (i >= s.size() || !std::isdigit(static_cast<unsigned char>(s[i]))) return false;
+        // RFC 8259 forbids leading zeros in the integer part (e.g. "0123", "-01").
+        // Such zero-padded values must be emitted as quoted strings, not bare tokens.
+        if (s[i] == '0' && i + 1 < s.size() && std::isdigit(static_cast<unsigned char>(s[i + 1]))) {
+            return false;
+        }
         while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
         if (i < s.size() && s[i] == '.') {
             ++i;
@@ -1112,6 +1141,7 @@ public:
         } else if (compress_ || ends_with_gz(output_path_)) {
             compress_ = true;
             gz_file_ = gzopen(output_path_.c_str(), "wb");
+            if (gz_file_) gzbuffer(gz_file_, 1 << 17);  // 128KB: fewer per-record deflate calls
             if (!gz_file_) {
                 throw std::runtime_error("Cannot open output file: " + output_path_);
             }
@@ -1434,7 +1464,20 @@ private:
                 case '&': result += "%26"; break;
                 case ' ': result += "%20"; break;
                 case '\t': result += "%09"; break;
-                default: result += c; break;
+                case '\n': result += "%0A"; break;
+                case '\r': result += "%0D"; break;
+                default:
+                    // Percent-encode any other control byte so it cannot break the
+                    // single VCF data line (VCF 4.x forbids embedded line breaks).
+                    if (static_cast<unsigned char>(c) < 0x20) {
+                        static const char* HEX = "0123456789ABCDEF";
+                        result += '%';
+                        result += HEX[(static_cast<unsigned char>(c) >> 4) & 0xF];
+                        result += HEX[static_cast<unsigned char>(c) & 0xF];
+                    } else {
+                        result += c;
+                    }
+                    break;
             }
         }
         return result;

@@ -101,7 +101,10 @@ inline ExonIntronInfo get_exon_intron_number(
                 info.number = i + 1;
             }
 
-            info.position_in_feature = position - start + 1;
+            // Offset within the feature is measured in transcription direction:
+            // from the low coordinate on '+' strand, from the high coordinate on '-'.
+            info.position_in_feature = (strand == '-') ? (end - position + 1)
+                                                       : (position - start + 1);
             info.feature_length = end - start + 1;
             return info;
         }
@@ -123,7 +126,8 @@ inline ExonIntronInfo get_exon_intron_number(
                     info.number = i + 1;
                 }
 
-                info.position_in_feature = position - intron_start + 1;
+                info.position_in_feature = (strand == '-') ? (intron_end - position + 1)
+                                                            : (position - intron_start + 1);
                 info.feature_length = intron_end - intron_start + 1;
                 return info;
             }
@@ -219,7 +223,10 @@ inline ExonIntronInfo get_cds_exon_number(
                 info.number = static_cast<int>(i) + 1;
             }
 
-            info.position_in_feature = position - start + 1;
+            // Offset within the feature is measured in transcription direction:
+            // from the low coordinate on '+' strand, from the high coordinate on '-'.
+            info.position_in_feature = (strand == '-') ? (end - position + 1)
+                                                       : (position - start + 1);
             info.feature_length = end - start + 1;
             return info;
         }
@@ -239,7 +246,8 @@ inline ExonIntronInfo get_cds_exon_number(
                     info.number = static_cast<int>(i) + 1;
                 }
 
-                info.position_in_feature = position - intron_start + 1;
+                info.position_in_feature = (strand == '-') ? (intron_end - position + 1)
+                                                            : (position - intron_start + 1);
                 info.feature_length = intron_end - intron_start + 1;
                 return info;
             }

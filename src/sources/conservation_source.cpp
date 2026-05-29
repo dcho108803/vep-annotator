@@ -76,11 +76,26 @@ public:
                     format_score(score.value());
             }
         } else {
-            // For indels, get mean score across affected region
-            int start = pos;
+            // For indels, score only the changed reference bases. ref/alt here are
+            // raw VCF alleles, so a shared leading anchor base (e.g. REF=ATG,ALT=A)
+            // must be skipped or it biases the mean toward the unchanged base.
+            int shared = 0;
+            if (!ref.empty() && !alt.empty() && ref[0] == alt[0] &&
+                ref.length() != alt.length()) {
+                shared = 1;
+            }
+            int start = pos + shared;
             int end = pos + static_cast<int>(ref.length()) - 1;
 
-            auto mean = reader_->get_mean(chrom, start, end);
+            std::optional<double> mean;
+            if (end >= start) {
+                // Deletion: score the deleted bases.
+                mean = reader_->get_mean(chrom, start, end);
+            } else {
+                // Pure insertion (no reference bases changed): score the two
+                // genomic bases flanking the insertion point instead of the anchor.
+                mean = reader_->get_mean(chrom, pos, pos + 1);
+            }
             if (mean.has_value()) {
                 annotations[source_name_ + ":" + field_name_] =
                     format_score(mean.value());

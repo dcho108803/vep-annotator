@@ -85,7 +85,7 @@ public:
         std::unordered_map<std::string, std::string>& annotations
     ) override {
         ensure_initialized();
-        (void)transcript;
+        const std::string gene = transcript ? transcript->gene_name : std::string();
 
         // Query all active readers, return first match
         std::vector<TabixTSVReader*> readers;
@@ -94,7 +94,7 @@ public:
         if (unified_reader_ && unified_reader_->is_valid()) readers.push_back(unified_reader_.get());
 
         for (auto* reader : readers) {
-            if (query_reader(*reader, chrom, pos, ref, alt, annotations)) {
+            if (query_reader(*reader, chrom, pos, ref, alt, gene, annotations)) {
                 return;
             }
         }
@@ -143,12 +143,13 @@ public:
                 if (ref_it == record.end() || alt_it == record.end()) continue;
                 if (ref_it->second != ref) continue;
 
-                int alt_index = find_alt_index(alt_it->second, alt);
-                if (alt_index < 0) continue;
+                // Gate on the record being for our variant allele.
+                if (find_alt_index(alt_it->second, alt) < 0) continue;
 
                 auto info_it = record.find("INFO");
                 if (info_it != record.end()) {
-                    parse_spliceai_info(info_it->second, alt_index, result);
+                    // query() has no transcript context: gene-agnostic allele match.
+                    parse_spliceai_info(info_it->second, alt, std::string(), result);
                     return result;
                 }
             }
@@ -198,6 +199,7 @@ private:
     bool query_reader(TabixTSVReader& reader,
                       const std::string& chrom, int pos,
                       const std::string& ref, const std::string& alt,
+                      const std::string& gene_symbol,
                       std::unordered_map<std::string, std::string>& annotations) const {
         auto records = reader.query(chrom, pos);
         for (const auto& record : records) {
@@ -206,24 +208,33 @@ private:
             if (ref_it == record.end() || alt_it == record.end()) continue;
             if (ref_it->second != ref) continue;
 
-            int alt_index = find_alt_index(alt_it->second, alt);
-            if (alt_index < 0) continue;
+            // Gate on the record being for our variant allele.
+            if (find_alt_index(alt_it->second, alt) < 0) continue;
 
             auto info_it = record.find("INFO");
             if (info_it == record.end()) continue;
 
-            parse_spliceai_info(info_it->second, alt_index, annotations);
+            parse_spliceai_info(info_it->second, alt, gene_symbol, annotations);
             return true;
         }
         return false;
     }
 
-    void parse_spliceai_info(const std::string& info, int alt_index,
+    void parse_spliceai_info(const std::string& info, const std::string& alt,
+                             const std::string& gene_symbol,
                              std::unordered_map<std::string, std::string>& annotations) const {
         // SpliceAI INFO format: SpliceAI=ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL
-        // Multiple alleles separated by ','
+        // The list is comma-separated by (allele x gene); a position overlapping
+        // several genes has one entry per gene. Select the entry that matches BOTH
+        // the variant allele AND the transcript's gene -- indexing by the VCF ALT
+        // column index picks the wrong gene's prediction when >1 gene overlaps.
 
+        // Match the SpliceAI key only at an INFO field boundary (start or after ';')
+        // so a different key ending in "SpliceAI" cannot be matched.
         size_t start = info.find("SpliceAI=");
+        while (start != std::string::npos && start != 0 && info[start - 1] != ';') {
+            start = info.find("SpliceAI=", start + 1);
+        }
         if (start == std::string::npos) return;
 
         std::string spliceai_value = info.substr(start + 9);
@@ -232,28 +243,35 @@ private:
             spliceai_value = spliceai_value.substr(0, end);
         }
 
-        // Split by comma for multiple alleles
-        std::vector<std::string> allele_values;
+        // Split by comma into (allele x gene) entries and parse each into fields.
+        std::vector<std::vector<std::string>> parsed;
         {
             std::istringstream iss(spliceai_value);
-            std::string v;
-            while (std::getline(iss, v, ',')) {
-                allele_values.push_back(v);
+            std::string entry;
+            while (std::getline(iss, entry, ',')) {
+                std::vector<std::string> f;
+                std::istringstream eiss(entry);
+                std::string tok;
+                while (std::getline(eiss, tok, '|')) f.push_back(tok);
+                parsed.push_back(std::move(f));
             }
         }
 
-        if (alt_index >= static_cast<int>(allele_values.size())) return;
-
-        // Parse pipe-delimited fields for this allele
-        std::string value = allele_values[alt_index];
-        std::vector<std::string> fields;
-        {
-            std::istringstream iss(value);
-            std::string f;
-            while (std::getline(iss, f, '|')) {
-                fields.push_back(f);
+        // Choose the entry: must match the allele; prefer the one whose SYMBOL is
+        // the transcript's gene. Fall back to the first allele-matching entry when
+        // there is no gene context (query()) or no gene-specific entry.
+        int allele_idx = -1, gene_idx = -1;
+        for (size_t i = 0; i < parsed.size(); ++i) {
+            if (parsed[i].size() < 10) continue;
+            if (parsed[i][0] != alt) continue;
+            if (allele_idx < 0) allele_idx = static_cast<int>(i);
+            if (!gene_symbol.empty() && parsed[i][1] == gene_symbol && gene_idx < 0) {
+                gene_idx = static_cast<int>(i);
             }
         }
+        int use = (gene_idx >= 0) ? gene_idx : allele_idx;
+        if (use < 0) return;
+        const std::vector<std::string>& fields = parsed[use];
 
         if (fields.size() < 10) return;
 

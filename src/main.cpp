@@ -297,6 +297,26 @@ void post_process_annotations(std::vector<vep::VariantAnnotation>& annotations,
                 }
             }
         }
+
+        // Gene constraint (pLI / LOEUF) from --pli / --loeuf / --constraint.
+        // The DB is a process-wide singleton populated at startup; emit the scores
+        // for the variant's gene. Look up by Ensembl gene ID first (gnomAD constraint
+        // files key on ID), then fall back to gene symbol (pLI/LOEUF files key on
+        // symbol). Only emit scores that are actually present (>= 0).
+        const vep::GeneConstraintDB& constraint_db = vep::get_gene_constraint_db();
+        if (constraint_db.is_loaded()) {
+            vep::GeneConstraint gc;
+            if (!ann.gene_id.empty()) gc = constraint_db.get_by_gene_id(ann.gene_id);
+            if (!gc.has_data() && !ann.gene_symbol.empty()) {
+                gc = constraint_db.get_by_symbol(ann.gene_symbol);
+            }
+            if (gc.pLI >= 0) {
+                ann.custom_annotations["pLI"] = vep::format_constraint_score(gc.pLI);
+            }
+            if (gc.oe_lof_upper >= 0) {
+                ann.custom_annotations["LOEUF"] = vep::format_constraint_score(gc.oe_lof_upper);
+            }
+        }
     }
 }
 
@@ -724,6 +744,10 @@ static std::vector<std::string> load_config_tokens(const std::string& path, std:
 }
 
 int main(int argc, char* argv[]) {
+    // Faster stdout for large batch runs piped to stdout. Safe: the codebase
+    // never interleaves C stdio (printf) with std::cout output.
+    std::ios::sync_with_stdio(false);
+
     // Basic options
     std::string gtf_path;
     std::string fasta_path;
@@ -971,7 +995,15 @@ int main(int argc, char* argv[]) {
         }
         // Output format options
         else if (arg == "--output-format" && i + 1 < argc) {
-            output_format = vep::parse_output_format(argv[++i]);
+            std::string fmt = argv[++i];
+            std::string fmt_lc = fmt;
+            for (auto& c : fmt_lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (fmt_lc != "tsv" && fmt_lc != "json" && fmt_lc != "vcf") {
+                std::cerr << "Error: unknown output format '" << fmt
+                          << "' (expected tsv, json, or vcf)" << std::endl;
+                return 1;
+            }
+            output_format = vep::parse_output_format(fmt);
         } else if (arg == "--compress") {
             compress_output = true;
         } else if (arg == "--stats") {
@@ -1027,7 +1059,15 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--flag-pick") {
             filter_config.flag_pick = true;
         } else if (arg == "--pick-order" && i + 1 < argc) {
-            filter_config.pick_order = vep::parse_pick_order(argv[++i]);
+            std::string pick_order_arg = argv[++i];
+            filter_config.pick_order = vep::parse_pick_order(pick_order_arg);
+            if (filter_config.pick_order.empty()) {
+                std::cerr << "Error: --pick-order '" << pick_order_arg
+                          << "' contained no valid criteria (valid: canonical, mane, "
+                             "appris, tsl, biotype, ccds, rank, length, ensembl, refseq)"
+                          << std::endl;
+                return 1;
+            }
         }
         // Transcript filtering options
         else if (arg == "--canonical") {
@@ -1377,6 +1417,11 @@ int main(int argc, char* argv[]) {
         // Term style (Phase B5)
         else if (arg == "--terms" && i + 1 < argc) {
             term_style = argv[++i];
+            if (term_style != "SO" && term_style != "display") {
+                std::cerr << "Error: unknown --terms style '" << term_style
+                          << "' (expected SO or display)" << std::endl;
+                return 1;
+            }
         }
         // No-escape (Phase B6) - disable VCF URL encoding of special characters
         else if (arg == "--no-escape") {
@@ -1772,6 +1817,13 @@ int main(int argc, char* argv[]) {
         annotator.set_include_total_length(include_total_length);
     };
 
+    // Plugin loader MUST outlive every annotator (and the plugin-backed sources they
+    // hold), because ~PluginLoader dlclose()s the shared libraries. Declared here at
+    // function scope, before any annotator, so it is destroyed last. Plugins are
+    // loaded once (guarded) and the same sources served to every annotator.
+    vep::PluginLoader plugin_loader;
+    bool plugins_loaded = false;
+
     // 2. Set up annotation sources on the annotator. Returns custom_columns
     //    populated with annotation source field names.
     auto setup_annotation_sources = [&](vep::VEPAnnotator& annotator) -> std::vector<std::string> {
@@ -1935,19 +1987,22 @@ int main(int argc, char* argv[]) {
             annotator.add_source(loftool_source);
         }
 
-        // Load plugins
-        vep::PluginLoader plugin_loader;
-        for (size_t i = 0; i < plugin_dirs.size(); ++i) {
-            plugin_loader.add_plugin_dir(plugin_dirs[i]);
-        }
-        plugin_loader.load_plugins_from_dirs();
-
-        for (size_t i = 0; i < plugins.size(); ++i) {
-            const std::string& plugin_path = plugins[i].first;
-            const std::string& plugin_config = plugins[i].second;
-            if (!plugin_loader.load_plugin(plugin_path, plugin_config)) {
-                std::cerr << "Warning: Failed to load plugin: " << plugin_path << std::endl;
+        // Load plugins once into the function-scoped loader; subsequent annotators
+        // (e.g. per --fork thread) reuse the already-loaded sources.
+        if (!plugins_loaded) {
+            for (size_t i = 0; i < plugin_dirs.size(); ++i) {
+                plugin_loader.add_plugin_dir(plugin_dirs[i]);
             }
+            plugin_loader.load_plugins_from_dirs();
+
+            for (size_t i = 0; i < plugins.size(); ++i) {
+                const std::string& plugin_path = plugins[i].first;
+                const std::string& plugin_config = plugins[i].second;
+                if (!plugin_loader.load_plugin(plugin_path, plugin_config)) {
+                    std::cerr << "Warning: Failed to load plugin: " << plugin_path << std::endl;
+                }
+            }
+            plugins_loaded = true;
         }
 
         auto plugin_sources = plugin_loader.get_all_sources();
@@ -2033,6 +2088,11 @@ int main(int argc, char* argv[]) {
         }
         if (filter_config.flag_pick || filter_config.flag_pick_allele || filter_config.flag_pick_allele_gene) {
             custom_columns.push_back("PICK");
+        }
+        // Gene constraint columns (when --pli / --loeuf / --constraint loaded data)
+        if (vep::get_gene_constraint_db().is_loaded()) {
+            custom_columns.push_back("pLI");
+            custom_columns.push_back("LOEUF");
         }
     };
 
@@ -2384,8 +2444,10 @@ int main(int argc, char* argv[]) {
 
                 for (auto& w : workers) w.join();
 
+                std::exception_ptr first_error;
                 for (int t = 0; t < fork_count; t++) {
                     if (thread_exceptions[t]) {
+                        if (!first_error) first_error = thread_exceptions[t];
                         try {
                             std::rethrow_exception(thread_exceptions[t]);
                         } catch (const std::exception& e) {
@@ -2394,6 +2456,10 @@ int main(int argc, char* argv[]) {
                         }
                     }
                 }
+                // Propagate the failure to main()'s handler so a --fork run exits
+                // non-zero just like single-thread mode, instead of silently emitting
+                // a partial output file with exit code 0.
+                if (first_error) std::rethrow_exception(first_error);
 
                 for (size_t i = 0; i < queries.size(); i++) {
                     annotation_cache[queries[i].key] = std::move(results[i]);
@@ -2720,18 +2786,13 @@ int main(int argc, char* argv[]) {
                         // Normal small-variant annotation path (use minimized alleles if --minimal)
                         // Use annotate() (all transcripts) when any pick/filter flag needs
                         // the full set for proper transcript selection
+                        // Any transcript-selecting/filtering flag needs the full
+                        // transcript set; otherwise the filter runs against a single
+                        // most-severe transcript and silently drops valid variants
+                        // (e.g. --biotype without a pick flag). Kept in sync via
+                        // TranscriptFilterConfig::requires_all_transcripts().
                         bool need_all = all_transcripts ||
-                            filter_config.pick || filter_config.pick_allele ||
-                            filter_config.pick_allele_gene || filter_config.per_gene ||
-                            filter_config.flag_pick || filter_config.flag_pick_allele ||
-                            filter_config.flag_pick_allele_gene ||
-                            filter_config.most_severe ||
-                            filter_config.coding_only || filter_config.canonical_only ||
-                            filter_config.mane_only || filter_config.gencode_basic ||
-                            filter_config.no_intergenic ||
-                            filter_config.exclude_predicted ||
-                            !filter_config.include_consequences.empty() ||
-                            !filter_config.exclude_consequences.empty();
+                            filter_config.requires_all_transcripts();
                         // Use cached results from parallel pre-annotation, or annotate inline
                         if (!annotation_cache.empty()) {
                             // Normalize dashes to empty for cache lookup (cache keys use empty strings)
@@ -3267,11 +3328,12 @@ int main(int argc, char* argv[]) {
                         annotations.push_back(std::move(ann));
                     }
                 }
-            } else if (all_transcripts ||
-                       filter_config.pick || filter_config.pick_allele ||
-                       filter_config.pick_allele_gene || filter_config.per_gene ||
-                       filter_config.flag_pick || filter_config.flag_pick_allele ||
-                       filter_config.flag_pick_allele_gene) {
+            } else if (all_transcripts || filter_config.requires_all_transcripts()) {
+                // Any transcript-selecting/filtering flag (--coding-only, --biotype,
+                // --canonical-only, --mane-only, --no-intergenic, include/exclude
+                // consequences, etc.) needs all transcripts; otherwise the filter
+                // below runs against a single most-severe transcript and silently
+                // drops variants whose matching transcript was not the most severe.
                 annotations = annotator.annotate(chrom, pos, ref, alt);
             } else {
                 auto ann = annotator.annotate_most_severe(chrom, pos, ref, alt);

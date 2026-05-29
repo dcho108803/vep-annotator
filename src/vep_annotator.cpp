@@ -28,6 +28,13 @@
 
 namespace vep {
 
+// Safe ASCII upper-case. std::toupper has defined behavior only for arguments
+// representable as unsigned char (or EOF); passing a negative (signed) char is
+// undefined behavior. Route all char upper-casing through this helper.
+static inline char ascii_upper(char c) {
+    return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+}
+
 // ============================================================================
 // Complement helper
 // ============================================================================
@@ -207,7 +214,7 @@ char CodonTable::translate(const std::string& codon) {
     if (codon.length() != 3) return 'X';
 
     std::string upper_codon = codon;
-    std::transform(upper_codon.begin(), upper_codon.end(), upper_codon.begin(), ::toupper);
+    std::transform(upper_codon.begin(), upper_codon.end(), upper_codon.begin(), ascii_upper);
 
     auto it = table.find(upper_codon);
     return (it != table.end()) ? it->second : 'X';
@@ -229,13 +236,13 @@ std::string CodonTable::get_three_letter(char aa) {
 
 bool CodonTable::is_start_codon(const std::string& codon) {
     std::string upper = codon;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    std::transform(upper.begin(), upper.end(), upper.begin(), ascii_upper);
     return upper == "ATG";
 }
 
 bool CodonTable::is_start_codon(const std::string& codon, const std::string& chromosome) {
     std::string upper = codon;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    std::transform(upper.begin(), upper.end(), upper.begin(), ascii_upper);
     // Standard start codon
     if (upper == "ATG") return true;
     // Vertebrate mitochondrial alternative start codons (NCBI table 2)
@@ -249,13 +256,13 @@ bool CodonTable::is_start_codon(const std::string& codon, const std::string& chr
 
 bool CodonTable::is_stop_codon(const std::string& codon) {
     std::string upper = codon;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    std::transform(upper.begin(), upper.end(), upper.begin(), ascii_upper);
     return upper == "TAA" || upper == "TAG" || upper == "TGA";
 }
 
 bool CodonTable::is_stop_codon(const std::string& codon, const std::string& chromosome) {
     std::string upper = codon;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    std::transform(upper.begin(), upper.end(), upper.begin(), ascii_upper);
 
     // Normalize chromosome name for MT detection
     std::string chr = chromosome;
@@ -278,7 +285,7 @@ char CodonTable::translate_mt(const std::string& codon) {
 
     if (codon.length() != 3) return 'X';
     std::string upper = codon;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    std::transform(upper.begin(), upper.end(), upper.begin(), ascii_upper);
 
     auto it = mt_overrides.find(upper);
     if (it != mt_overrides.end()) return it->second;
@@ -324,7 +331,7 @@ static char translate_with_sec(const std::string& codon, const std::string& chro
     char aa = CodonTable::translate(codon, chromosome);
     if (aa == '*' && !gene_name.empty()) {
         std::string upper = codon;
-        std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+        std::transform(upper.begin(), upper.end(), upper.begin(), ascii_upper);
         if (upper == "TGA" && is_selenoprotein_gene(gene_name)) {
             return 'U';  // Selenocysteine
         }
@@ -1038,10 +1045,12 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 }
 
                 current_seq.clear();
-                current_seq.reserve(300000000);  // Reserve ~300MB for human chromosomes
+                // No eager reserve: std::string growth is geometric (O(log n)
+                // reallocations). Reserving 300MB per contig blew up peak memory
+                // on multi-contig/scaffold assemblies and transcriptome FASTAs.
             } else {
                 // Convert to uppercase
-                std::transform(line.begin(), line.end(), line.begin(), ::toupper);
+                std::transform(line.begin(), line.end(), line.begin(), ascii_upper);
                 current_seq += line;
             }
         }
@@ -1085,9 +1094,9 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 }
 
                 current_seq.clear();
-                current_seq.reserve(300000000);
+                // No eager reserve (see note in the gzipped-FASTA branch above).
             } else {
-                std::transform(line.begin(), line.end(), line.begin(), ::toupper);
+                std::transform(line.begin(), line.end(), line.begin(), ascii_upper);
                 current_seq += line;
             }
         }
@@ -1170,6 +1179,12 @@ struct TranscriptDatabase::Impl {
     // Spatial index: chromosome -> sorted list of (start, end, transcript_id)
     std::unordered_map<std::string, std::vector<std::tuple<int, int, std::string>>> chrom_index;
 
+    // Parallel to chrom_index: prefix maximum of `end` over entries[0..i]. Lets
+    // get_transcripts_in_region run an O(log n + hits) interval query instead of a
+    // from-zero linear scan (transcripts can start before the window yet overlap it,
+    // so a plain lower_bound on start is insufficient; the running max-end bounds it).
+    std::unordered_map<std::string, std::vector<int>> chrom_index_maxend;
+
     // Gene spatial index: chromosome -> sorted vector of (gene.start, gene_ptr)
     std::unordered_map<std::string, std::vector<std::pair<int, const Gene*>>> gene_chrom_index;
 
@@ -1180,9 +1195,16 @@ struct TranscriptDatabase::Impl {
             );
         }
 
-        // Sort by start position
+        // Sort by start position, then build the prefix-max-end array.
         for (auto& [chrom, entries] : chrom_index) {
             std::sort(entries.begin(), entries.end());
+            auto& maxend = chrom_index_maxend[chrom];
+            maxend.resize(entries.size());
+            int running = 0;
+            for (size_t i = 0; i < entries.size(); ++i) {
+                running = std::max(running, std::get<1>(entries[i]));
+                maxend[i] = running;
+            }
         }
 
         // Build gene spatial index (genes map is fully populated at this point)
@@ -1512,18 +1534,32 @@ std::vector<const Transcript*> TranscriptDatabase::get_transcripts_in_region(
     if (it == pimpl_->chrom_index.end()) {
         return results;
     }
+    const auto& entries = it->second;
+    const auto& maxend = pimpl_->chrom_index_maxend.at(normalized);
 
-    for (const auto& [tr_start, tr_end, tid] : it->second) {
-        // Check overlap
-        if (tr_start <= end && tr_end >= start) {
+    // Entries are sorted by start. All entries that can overlap [start,end] have
+    // tr_start <= end; find the upper bound on start == end (first entry past it).
+    auto hi = std::upper_bound(
+        entries.begin(), entries.end(), end,
+        [](int value, const std::tuple<int, int, std::string>& e) {
+            return value < std::get<0>(e);
+        });
+    int upper = static_cast<int>(hi - entries.begin());  // entries[0, upper) have start <= end
+
+    // Scan backward; stop as soon as the prefix max-end falls below the query start
+    // (prefix max-end is monotonic non-decreasing, so no earlier entry can overlap).
+    for (int i = upper - 1; i >= 0; --i) {
+        if (maxend[i] < start) break;
+        const auto& [tr_start, tr_end, tid] = entries[i];
+        if (tr_end >= start) {  // tr_start <= end already guaranteed
             auto tr_it = pimpl_->transcripts.find(tid);
             if (tr_it != pimpl_->transcripts.end()) {
                 results.push_back(&tr_it->second);
             }
         }
-        // Since sorted by start, can break early
-        if (tr_start > end) break;
     }
+    // Restore ascending-start order (we collected in descending order).
+    std::reverse(results.begin(), results.end());
 
     return results;
 }
@@ -1971,6 +2007,15 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
         ann.consequences.push_back(ConsequenceType::NMD_TRANSCRIPT_VARIANT);
     }
 
+    // Order consequence terms most-severe-first (Perl VEP prints the Consequence
+    // column / CSQ / JSON terms in severity order). Terms are pushed in collection
+    // order (splice, then UTR, then the specific coding term), so sort by rank here
+    // once; stable to keep deterministic ordering among equal-rank terms.
+    std::stable_sort(ann.consequences.begin(), ann.consequences.end(),
+                     [](ConsequenceType a, ConsequenceType b) {
+                         return get_consequence_rank(a) < get_consequence_rank(b);
+                     });
+
     // Get most severe impact
     ann.impact = Impact::MODIFIER;
     for (const auto& c : ann.consequences) {
@@ -1992,14 +2037,12 @@ VariantAnnotation VEPAnnotator::annotate_transcript(
 
     // Calculate CDS position and codon changes for coding variants
     if (transcript.is_coding()) {
-        const std::string cached_cds = build_cds_sequence(chrom, transcript);
-        int cds_pos = calculate_cds_position(pos, transcript);
-        // For minus strand with multi-base ref, calculate_cds_position(pos) returns the
-        // HIGHEST affected CDS position. Adjust to the FIRST (lowest) affected position.
-        if (transcript.strand == '-' && ref.length() > 1) {
-            cds_pos = cds_pos - static_cast<int>(ref.length()) + 1;
-            if (cds_pos < 1) cds_pos = 1;
-        }
+        const std::string& cached_cds = build_cds_sequence(chrom, transcript);
+        // First (lowest, transcription-order) CDS position the variant touches.
+        // Handles multi-base variants spanning CDS/intron or CDS/UTR boundaries on
+        // either strand (bases outside the CDS are skipped, never clamped to 1).
+        int cds_pos = calculate_cds_position_range(
+            pos, static_cast<int>(ref.length()), transcript).first;
         if (cds_pos > 0) {
             annotate_coding_region(chrom, pos, ref, alt, transcript, cached_cds, cds_pos, ann);
         } else {
@@ -2080,9 +2123,13 @@ void VEPAnnotator::annotate_coding_region(
             int indel_len = static_cast<int>(indel_bases.size());
             bool is_cds_insertion = (ref.length() < alt.length());
             for (int i = 0; i < 1000; ++i) {
-                int check_idx = is_cds_insertion ? shift_pos : (shift_pos + indel_len - 1);
+                // For a deletion the deleted region is 0-based [shift_pos, shift_pos+indel_len-1];
+                // 3'-shifting slides right when the base IMMEDIATELY AFTER the deletion
+                // (0-based shift_pos+indel_len) equals the first deleted base. Reading
+                // the last deleted base (indel_len-1) mis-shifted period>1 tandem repeats.
+                int check_idx = is_cds_insertion ? shift_pos : (shift_pos + indel_len);
                 if (check_idx >= cds_len) break;
-                if (std::toupper(cached_cds[check_idx]) == std::toupper(indel_bases[0])) {
+                if (ascii_upper(cached_cds[check_idx]) == ascii_upper(indel_bases[0])) {
                     std::rotate(indel_bases.begin(), indel_bases.begin() + 1, indel_bases.end());
                     shift_pos++;
                 } else {
@@ -2567,6 +2614,16 @@ void VEPAnnotator::annotate_noncoding_hgvsc(
     // Exonic: use cDNA position with n. prefix
     // Recalculate cDNA position from the (potentially shifted) genomic position
     int cdna_pos = calculate_cdna_position(hgvs_pos, transcript);
+    // For a multi-base deletion on the MINUS strand, the genomically-first deleted
+    // base (hgvs_pos) is the cDNA-LAST base, so cdna_pos is the HIGHER coordinate and
+    // the +delta offset would build an inverted/over-high range. Anchor the start at
+    // the LOWEST cDNA coordinate of the deleted span instead.
+    if (transcript.strand == '-' && ref.length() > alt.length()) {
+        int del_span = static_cast<int>(ref.length()) - static_cast<int>(alt.length());
+        int g_last = hgvs_pos + del_span - 1;
+        int cdna_last = calculate_cdna_position(g_last, transcript);
+        if (cdna_last > 0) cdna_pos = std::min(cdna_pos, cdna_last);
+    }
     if (cdna_pos > 0) {
         std::string pos_str = std::to_string(cdna_pos);
         ann.hgvsc = build_hgvsc(pos_str, ref, alt, transcript, transcript_version_, "n",
@@ -2912,12 +2969,13 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
 
     // Coding region variant - determine specific consequence
     if (in_exon && pos <= transcript.cds_end && var_end >= transcript.cds_start) {
-        int cds_pos = calculate_cds_position(pos, transcript);
-        // For minus strand with multi-base ref, adjust from last to first affected CDS position
-        if (transcript.strand == '-' && ref.length() > 1) {
-            cds_pos = cds_pos - static_cast<int>(ref.length()) + 1;
-            if (cds_pos < 1) cds_pos = 1;
-        }
+        // First/last CDS positions the variant actually touches. Skips intronic and
+        // UTR bases, so a minus-strand multi-base variant whose genomic-leftmost base
+        // lies in the 3'UTR is no longer mis-clamped to CDS pos 1 (false start_lost).
+        auto cds_range = calculate_cds_position_range(
+            pos, static_cast<int>(ref.length()), transcript);
+        int cds_pos = cds_range.first;        // first (lowest, transcription order)
+        int cds_pos_last = cds_range.second;  // last (highest) affected CDS position
 
         if (cds_pos > 0) {
             // Check for incomplete terminal codon
@@ -2968,8 +3026,11 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 if (stop_codon_start > 0) {
                     bool overlaps_stop = false;
                     if (length_diff < 0) {
-                        // Deletion: check if deleted region reaches stop codon
-                        int del_end = cds_pos + ref_len - 1;
+                        // Deletion: check if deleted region reaches stop codon.
+                        // Use the last CDS position actually touched (cds_pos_last),
+                        // not cds_pos+ref_len-1, so UTR/intron bases in ref don't
+                        // inflate the span across a boundary.
+                        int del_end = cds_pos_last;
                         overlaps_stop = (del_end >= stop_codon_start);
                     } else {
                         // Insertion within stop codon
@@ -2988,12 +3049,12 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
                 return consequences;
             }
 
-            // Inframe indel
+            // Inframe indel. Perl VEP classifies a clean net inframe delins by the
+            // sign of the net length change (insertion vs deletion); protein_altering
+            // is reserved for genuinely indeterminate inframe cases. Classify by
+            // length_diff rather than emitting protein_altering for every delins.
             if (length_diff != 0 && length_diff % 3 == 0) {
-                if (ref_len > 1 && alt_len > 1 && ref_len != alt_len) {
-                    // Complex inframe change (delins)
-                    consequences.push_back(ConsequenceType::PROTEIN_ALTERING_VARIANT);
-                } else if (length_diff > 0) {
+                if (length_diff > 0) {
                     consequences.push_back(ConsequenceType::INFRAME_INSERTION);
                 } else {
                     consequences.push_back(ConsequenceType::INFRAME_DELETION);
@@ -3004,7 +3065,7 @@ std::vector<ConsequenceType> VEPAnnotator::determine_consequences(
             // SNV or MNV (same length substitution)
             if (ref.length() == alt.length()) {
                 // Use cached CDS sequence for codon extraction
-                std::string cds_seq = build_cds_sequence(transcript.chromosome, transcript);
+                const std::string& cds_seq = build_cds_sequence(transcript.chromosome, transcript);
 
                 if (cds_seq.empty()) {
                     consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
@@ -3155,7 +3216,32 @@ int VEPAnnotator::calculate_cds_position(int genomic_pos, const Transcript& tran
     return in_cds ? cds_pos : 0;
 }
 
-std::string VEPAnnotator::build_cds_sequence(
+std::pair<int, int> VEPAnnotator::calculate_cds_position_range(
+    int pos, int ref_len, const Transcript& transcript) const {
+    if (ref_len <= 1) {
+        int cp = calculate_cds_position(pos, transcript);
+        return {cp, cp};
+    }
+    // Multi-base reference: scan each covered genomic base and take the min/max
+    // of the CDS positions that actually fall inside the CDS. calculate_cds_position
+    // returns 0 for intronic/UTR bases, so they are naturally skipped. This avoids
+    // the incorrect assumption that all ref bases are contiguous in CDS space
+    // (which over-shifts across introns and mis-clamps when the genomic-leftmost
+    // base is outside the CDS, e.g. a minus-strand variant spanning the 3'UTR).
+    int g_hi = pos + ref_len - 1;
+    int min_cds = 0;
+    int max_cds = 0;
+    for (int g = pos; g <= g_hi; ++g) {
+        int cp = calculate_cds_position(g, transcript);
+        if (cp > 0) {
+            if (min_cds == 0 || cp < min_cds) min_cds = cp;
+            if (cp > max_cds) max_cds = cp;
+        }
+    }
+    return {min_cds, max_cds};
+}
+
+const std::string& VEPAnnotator::build_cds_sequence(
     const std::string& chrom, const Transcript& transcript) const {
 
     // Check cache first (under lock)
@@ -3193,12 +3279,10 @@ std::string VEPAnnotator::build_cds_sequence(
         }
     }
 
-    // Insert into cache (under lock)
-    {
-        std::lock_guard<std::mutex> lock(cds_cache_mutex_);
-        cds_cache_[transcript.id] = cds_seq;
-    }
-    return cds_seq;
+    // Insert into cache and return a reference to the cached entry (valid for the
+    // lifetime of this annotator; unordered_map element references survive inserts).
+    std::lock_guard<std::mutex> lock(cds_cache_mutex_);
+    return (cds_cache_[transcript.id] = std::move(cds_seq));
 }
 
 std::pair<std::string, std::string> VEPAnnotator::get_affected_codons(
@@ -3259,7 +3343,19 @@ std::pair<std::string, std::string> VEPAnnotator::get_affected_codons(
 
         return {ref_codon, alt_codon};
     } else {
-        // Handle indels (insertions and deletions)
+        // Handle indels (insertions and deletions).
+        //
+        // KNOWN LIMITATION (2026-05-29 review, items #6/#7): this extracts a single
+        // 3-base codon, and the mutated CDS is spliced using ref.length() (a GENOMIC
+        // span). Consequences:
+        //   - A multi-codon in-frame insertion/delins reports only its first changed
+        //     codon in codons/amino_acids/HGVSp.
+        //   - A deletion spanning an exon/intron boundary over-removes CDS bases
+        //     (ref.length() counts intronic bases absent from cds_seq).
+        // Fixing correctly requires extracting the full affected codon range and
+        // intersecting the genomic deletion span with transcript.cds_regions, plus
+        // multi-residue support in generate_hgvsp; deferred pending dedicated test
+        // vectors so the change can be validated rather than guessed.
         int codon_start = first_codon * 3;
         if (codon_start + 3 > static_cast<int>(cds_seq.length())) {
             return {"", ""};
@@ -3868,8 +3964,7 @@ std::tuple<int, std::string, std::string> VEPAnnotator::right_normalize(
         if (check_pos > chrom_len || check_pos <= 0) break;
 
         char next_base = reference_->get_base(chrom, check_pos);
-        if (static_cast<unsigned char>(std::toupper(next_base)) ==
-            static_cast<unsigned char>(std::toupper(shifted_indel[0]))) {
+        if (ascii_upper(next_base) == ascii_upper(shifted_indel[0])) {
             std::rotate(shifted_indel.begin(), shifted_indel.begin() + 1, shifted_indel.end());
             shifted_pos++;
         } else {

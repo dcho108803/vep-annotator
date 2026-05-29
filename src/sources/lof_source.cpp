@@ -81,19 +81,22 @@ public:
         bool is_splice_acceptor = false;
         int splice_donor_exon_idx = -1;
         int splice_acceptor_exon_idx = -1;
+        const bool is_minus = (transcript->strand == '-');
         for (size_t i = 0; i < transcript->exons.size(); ++i) {
             const auto& exon = transcript->exons[i];
-            // Splice acceptor: 2bp before exon start
+            // Exons are genomic-sorted. The low-coordinate intron boundary
+            // (exon.start side) is the ACCEPTOR on '+' but the DONOR on '-'; the
+            // high-coordinate boundary (exon.end side) is the DONOR on '+' but the
+            // ACCEPTOR on '-'. Assign by strand so the right dinucleotide is read.
             if (i > 0 && pos >= exon.start - 2 && pos <= exon.start - 1) {
                 is_splice_site = true;
-                is_splice_acceptor = true;
-                splice_acceptor_exon_idx = static_cast<int>(i);
+                if (is_minus) { is_splice_donor = true; splice_donor_exon_idx = static_cast<int>(i); }
+                else { is_splice_acceptor = true; splice_acceptor_exon_idx = static_cast<int>(i); }
             }
-            // Splice donor: 2bp after exon end
-            if (i < transcript->exons.size() - 1 && pos >= exon.end + 1 && pos <= exon.end + 2) {
+            if (i + 1 < transcript->exons.size() && pos >= exon.end + 1 && pos <= exon.end + 2) {
                 is_splice_site = true;
-                is_splice_donor = true;
-                splice_donor_exon_idx = static_cast<int>(i);
+                if (is_minus) { is_splice_acceptor = true; splice_acceptor_exon_idx = static_cast<int>(i); }
+                else { is_splice_donor = true; splice_donor_exon_idx = static_cast<int>(i); }
             }
         }
         for (const auto& cds : transcript->cds_regions) {
@@ -150,8 +153,10 @@ public:
             is_hc = false;
         }
 
-        // Flag: Incomplete CDS
-        if (transcript->cds_start <= 0 || transcript->cds_end <= 0) {
+        // Flag: Incomplete CDS. cds_start/cds_end are genomic CDS boundaries (always
+        // positive for any coding transcript reaching here), so they never indicate
+        // incompleteness. The real signals are cds_start_NF / cds_end_NF.
+        if (transcript->cds_start_NF || transcript->cds_end_NF) {
             flags.push_back("INCOMPLETE_CDS");
             is_hc = false;
         }
@@ -184,17 +189,14 @@ public:
         // For splice_donor_variant: canonical donor is GT (first 2 intronic bases after exon)
         // For splice_acceptor_variant: canonical acceptor is AG (last 2 intronic bases before exon)
         if (is_splice_site && reference_ && reference_->has_chromosome(chrom)) {
-            bool is_minus = (transcript->strand == '-');
-
             if (is_splice_donor && splice_donor_exon_idx >= 0) {
                 const auto& exon = transcript->exons[static_cast<size_t>(splice_donor_exon_idx)];
-                // Donor dinucleotide: 2bp immediately after exon end (genomic)
-                std::string dinuc = reference_->get_sequence(chrom, exon.end + 1, exon.end + 2);
-                if (is_minus) {
-                    dinuc = loftee_reverse_complement(dinuc);
-                }
-                // On + strand: canonical donor is GT; on - strand after RC: canonical is GT
-                // (because the - strand intron starts with GT in transcript orientation)
+                // Donor intron bases are immediately 3' of the exon in TRANSCRIPT
+                // orientation: genomic exon.end+1..+2 on '+', exon.start-2..-1 on '-'
+                // (reverse-complemented). Canonical donor is GT in transcript sense.
+                std::string dinuc = is_minus
+                    ? loftee_reverse_complement(reference_->get_sequence(chrom, exon.start - 2, exon.start - 1))
+                    : reference_->get_sequence(chrom, exon.end + 1, exon.end + 2);
                 if (dinuc.length() == 2 && dinuc != "GT") {
                     flags.push_back("NON_CAN_SPLICE");
                     is_hc = false;
@@ -203,12 +205,12 @@ public:
 
             if (is_splice_acceptor && splice_acceptor_exon_idx >= 0) {
                 const auto& exon = transcript->exons[static_cast<size_t>(splice_acceptor_exon_idx)];
-                // Acceptor dinucleotide: 2bp immediately before exon start (genomic)
-                std::string dinuc = reference_->get_sequence(chrom, exon.start - 2, exon.start - 1);
-                if (is_minus) {
-                    dinuc = loftee_reverse_complement(dinuc);
-                }
-                // On + strand: canonical acceptor is AG; on - strand after RC: canonical is AG
+                // Acceptor intron bases are immediately 5' of the exon in TRANSCRIPT
+                // orientation: genomic exon.start-2..-1 on '+', exon.end+1..+2 on '-'
+                // (reverse-complemented). Canonical acceptor is AG in transcript sense.
+                std::string dinuc = is_minus
+                    ? loftee_reverse_complement(reference_->get_sequence(chrom, exon.end + 1, exon.end + 2))
+                    : reference_->get_sequence(chrom, exon.start - 2, exon.start - 1);
                 if (dinuc.length() == 2 && dinuc != "AG") {
                     flags.push_back("NON_CAN_SPLICE");
                     is_hc = false;

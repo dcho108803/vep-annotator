@@ -185,6 +185,10 @@ public:
 
     bool requires_allele_match() const override { return true; }
 
+    // Transcript-AGNOSTIC lookup. For per-transcript score columns (SIFT_score,
+    // Polyphen2_*, etc.) this returns the FIRST value dbNSFP lists, which is not
+    // tied to any particular transcript. Callers needing per-transcript scores
+    // must use annotate() (which threads transcript context), not query().
     std::unordered_map<std::string, std::string> query(
         const std::string& chrom,
         int pos,

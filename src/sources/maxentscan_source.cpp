@@ -114,7 +114,11 @@ public:
     std::string name() const override { return "maxentscan"; }
     std::string type() const override { return "splice"; }
     std::string description() const override {
-        return "MaxEntScan splice site scoring (algorithmic)";
+        // NOTE: this is an internal position-weight-matrix APPROXIMATION, not the
+        // trained Yeo & Burge maximum-entropy model used by the Perl VEP plugin.
+        // Scores are NOT numerically comparable to Perl VEP MaxEntScan; do not apply
+        // Perl-calibrated thresholds to them.
+        return "MaxEntScan splice site scoring (internal approximation, not Yeo & Burge)";
     }
 
     bool is_ready() const override { return true; }  // Always ready - no data file
@@ -339,7 +343,7 @@ public:
 
 private:
     static int base_to_index(char base) {
-        switch (std::toupper(base)) {
+        switch (std::toupper(static_cast<unsigned char>(base))) {
             case 'A': return 0;
             case 'C': return 1;
             case 'G': return 2;

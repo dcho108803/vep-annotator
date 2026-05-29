@@ -13,6 +13,7 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <unordered_map>
 #include <algorithm>
 #include <functional>
 #include <sstream>
@@ -104,6 +105,28 @@ struct TranscriptFilterConfig {
         pick_order.push_back(PickCriteria::RANK);
         pick_order.push_back(PickCriteria::LENGTH);
         freq_pop = "";  // Set by --filter-common (MAX_AF) or --freq-pop
+    }
+
+    /**
+     * True if this configuration selects among / filters transcripts, and
+     * therefore needs ALL overlapping transcripts annotated up front rather than
+     * just the single most-severe one. Used by the caller to choose between
+     * annotate() (all transcripts) and annotate_most_severe() (one transcript).
+     *
+     * Must stay in sync with the set of flags that trigger transcript_filter.filter():
+     * any flag that can drop or rank transcripts belongs here, otherwise the filter
+     * runs against a single transcript and silently drops variants whose matching
+     * transcript was not the most severe. (check_frequency is intentionally excluded:
+     * it is a variant-level decision with the same outcome regardless of how many
+     * transcripts are present.)
+     */
+    bool requires_all_transcripts() const {
+        return pick || pick_allele || pick_allele_gene || per_gene ||
+               flag_pick || flag_pick_allele || flag_pick_allele_gene ||
+               most_severe || canonical_only || mane_only || coding_only ||
+               gencode_basic || exclude_predicted || no_intergenic ||
+               !biotypes.empty() ||
+               !include_consequences.empty() || !exclude_consequences.empty();
     }
 };
 
@@ -452,6 +475,13 @@ private:
             int cmp = compare_by_criteria(a, b, criteria);
             if (cmp != 0) return cmp < 0;
         }
+        // Deterministic tiebreaker when all pick_order criteria tie, matching Perl
+        // VEP's fallback to the transcript stable_id. Without this, std::sort (not
+        // stable) would pick an implementation-defined winner among tied transcripts,
+        // producing non-reproducible output across runs/platforms.
+        if (a.annotation.transcript_id != b.annotation.transcript_id) {
+            return a.annotation.transcript_id < b.annotation.transcript_id;
+        }
         return false;
     }
 
@@ -532,25 +562,43 @@ private:
         return result;
     }
 
+    // Group annotations by a string key while preserving first-appearance order.
+    // Perl VEP emits per-gene/per-allele results in transcript-processing (input)
+    // order; std::map would re-order them alphabetically by key and break
+    // line-by-line parity diffing.
+    template <typename KeyFn>
+    std::vector<std::vector<AnnotationWithMeta>> group_ordered(
+        std::vector<AnnotationWithMeta> annotations, KeyFn key_fn) const {
+        std::unordered_map<std::string, size_t> slot;
+        std::vector<std::vector<AnnotationWithMeta>> groups;
+        for (auto& ann : annotations) {
+            std::string k = key_fn(ann);
+            auto it = slot.find(k);
+            if (it == slot.end()) {
+                slot.emplace(std::move(k), groups.size());
+                groups.emplace_back();
+                groups.back().push_back(std::move(ann));
+            } else {
+                groups[it->second].push_back(std::move(ann));
+            }
+        }
+        return groups;
+    }
+
     std::vector<AnnotationWithMeta> pick_per_allele(
         std::vector<AnnotationWithMeta> annotations) const {
 
         if (annotations.empty()) return annotations;
 
-        std::map<std::string, std::vector<AnnotationWithMeta>> by_allele;
-        for (auto& ann : annotations) {
-            std::string key = ann.annotation.ref_allele + ">" + ann.annotation.alt_allele;
-            by_allele[key].push_back(std::move(ann));
-        }
+        auto groups = group_ordered(std::move(annotations), [](const AnnotationWithMeta& a) {
+            return a.annotation.ref_allele + ">" + a.annotation.alt_allele;
+        });
 
         std::vector<AnnotationWithMeta> result;
-        for (auto& pair : by_allele) {
-            auto picked = pick_one(std::move(pair.second));
-            if (!picked.empty()) {
-                result.push_back(std::move(picked[0]));
-            }
+        for (auto& g : groups) {
+            auto picked = pick_one(std::move(g));
+            if (!picked.empty()) result.push_back(std::move(picked[0]));
         }
-
         return result;
     }
 
@@ -559,20 +607,15 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        std::map<std::string, std::vector<AnnotationWithMeta>> by_gene;
-        for (auto& ann : annotations) {
-            std::string gene_key = ann.annotation.gene_id.empty() ? ann.annotation.gene_symbol : ann.annotation.gene_id;
-            by_gene[gene_key].push_back(std::move(ann));
-        }
+        auto groups = group_ordered(std::move(annotations), [](const AnnotationWithMeta& a) {
+            return a.annotation.gene_id.empty() ? a.annotation.gene_symbol : a.annotation.gene_id;
+        });
 
         std::vector<AnnotationWithMeta> result;
-        for (auto& pair : by_gene) {
-            auto picked = pick_one(std::move(pair.second));
-            if (!picked.empty()) {
-                result.push_back(std::move(picked[0]));
-            }
+        for (auto& g : groups) {
+            auto picked = pick_one(std::move(g));
+            if (!picked.empty()) result.push_back(std::move(picked[0]));
         }
-
         return result;
     }
 
@@ -645,23 +688,18 @@ private:
 
         if (annotations.empty()) return annotations;
 
-        // Group by allele and gene (prefer gene_id for uniqueness)
-        std::map<std::string, std::vector<AnnotationWithMeta> > by_allele_gene;
-        for (auto& ann : annotations) {
-            std::string gene_key = ann.annotation.gene_id.empty() ? ann.annotation.gene_symbol : ann.annotation.gene_id;
-            std::string key = ann.annotation.ref_allele + ">" + ann.annotation.alt_allele +
-                              ":" + gene_key;
-            by_allele_gene[key].push_back(std::move(ann));
-        }
+        // Group by allele and gene (prefer gene_id for uniqueness), preserving
+        // first-appearance order for Perl VEP parity.
+        auto groups = group_ordered(std::move(annotations), [](const AnnotationWithMeta& a) {
+            std::string gene_key = a.annotation.gene_id.empty() ? a.annotation.gene_symbol : a.annotation.gene_id;
+            return a.annotation.ref_allele + ">" + a.annotation.alt_allele + ":" + gene_key;
+        });
 
         std::vector<AnnotationWithMeta> result;
-        for (auto& pair : by_allele_gene) {
-            auto picked = pick_one(std::move(pair.second));
-            if (!picked.empty()) {
-                result.push_back(std::move(picked[0]));
-            }
+        for (auto& g : groups) {
+            auto picked = pick_one(std::move(g));
+            if (!picked.empty()) result.push_back(std::move(picked[0]));
         }
-
         return result;
     }
 

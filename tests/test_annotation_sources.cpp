@@ -108,8 +108,9 @@ static Transcript make_incomplete_cds_transcript() {
     Transcript t = make_multi_exon_coding_transcript();
     t.id = "ENST00000000004";
     t.gene_name = "INCOMPLETE";
-    t.cds_start = 0;  // Incomplete CDS
-    t.cds_end = 3400;
+    // Incomplete CDS is signalled by cds_start_NF / cds_end_NF, not by zeroing the
+    // genomic cds_start (which is a real coordinate used by coordinate math).
+    t.cds_start_NF = true;
     return t;
 }
 

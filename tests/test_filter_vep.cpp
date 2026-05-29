@@ -73,9 +73,12 @@ TEST(ParseFilterOperator, LessThanOrEqual) {
 
 TEST(ParseFilterOperator, Contains) {
     EXPECT_EQ(parse_filter_operator("contains"), FilterOperator::CONTAINS);
-    EXPECT_EQ(parse_filter_operator("match"), FilterOperator::CONTAINS);
     EXPECT_EQ(parse_filter_operator("CONTAINS"), FilterOperator::CONTAINS);
-    EXPECT_EQ(parse_filter_operator("MATCH"), FilterOperator::CONTAINS);
+    // Perl VEP filter_vep 'match' is a regular-expression match, not a substring.
+    EXPECT_EQ(parse_filter_operator("match"), FilterOperator::REGEX);
+    EXPECT_EQ(parse_filter_operator("MATCH"), FilterOperator::REGEX);
+    EXPECT_EQ(parse_filter_operator("regex"), FilterOperator::REGEX);
+    EXPECT_EQ(parse_filter_operator("re"), FilterOperator::REGEX);
 }
 
 TEST(ParseFilterOperator, In) {
@@ -173,9 +176,10 @@ TEST(ParseFilterExpression, ContainsOperator) {
 }
 
 TEST(ParseFilterExpression, MatchOperator) {
+    // 'match' now resolves to a real regex operator (Perl VEP parity).
     FilterCondition cond = parse_filter_expression("Consequence match splice");
     EXPECT_EQ(cond.field, "Consequence");
-    EXPECT_EQ(cond.op, FilterOperator::CONTAINS);
+    EXPECT_EQ(cond.op, FilterOperator::REGEX);
     EXPECT_EQ(cond.value, "splice");
 }
 
@@ -205,22 +209,30 @@ TEST(ParseFilterExpression, ExistsOperator) {
 }
 
 TEST(ParseFilterExpression, RegexOperator) {
+    // 'regex' is now a reachable operator in the expression parser and maps to REGEX.
     FilterCondition cond = parse_filter_expression("Consequence regex splice");
-    // "regex" is not in the operators list for parse_filter_expression,
-    // but "match" is handled as CONTAINS. Let's verify what actually happens.
-    // Actually "regex" is not one of the search operators in parse_filter_expression.
-    // It would not be found as an operator. Let's check the behavior.
-    // The operators searched are: " is ", " eq ", " ne ", " gt ", " ge ", " lt ", " le ",
-    // " contains ", " in ", " match ", " exists", ">=", "<=", "!=", ">", "<", "="
-    // "regex" is not in the list, so no operator would be found; it falls back to EXISTS.
-    // However, let's just verify whatever the implementation does.
-    // Actually, looking more carefully: the "=" operator will match within "regex" at position
-    // ... no, "=" is searched as bare "=". Let me trace: expr = "Consequence regex splice"
-    // None of the space-delimited operators match " regex ". The symbolic ones: ">=", "<=", "!="
-    // won't match. ">" and "<" won't match. "=" won't be found.
-    // So it falls through to the "no operator found" branch -> EXISTS with field = entire expr.
-    EXPECT_EQ(cond.op, FilterOperator::EXISTS);
-    EXPECT_EQ(cond.field, "Consequence regex splice");
+    EXPECT_EQ(cond.field, "Consequence");
+    EXPECT_EQ(cond.op, FilterOperator::REGEX);
+    EXPECT_EQ(cond.value, "splice");
+}
+
+TEST(ApplyCondition, RegexMatchAndNoMatch) {
+    FilterableRecord rec;
+    rec.fields["Consequence"] = "missense_variant";
+    // Real regex search (not substring).
+    FilterCondition yes("Consequence", FilterOperator::REGEX, "^missense");
+    EXPECT_TRUE(apply_condition(rec, yes));
+    FilterCondition no("Consequence", FilterOperator::REGEX, "^stop");
+    EXPECT_FALSE(apply_condition(rec, no));
+}
+
+TEST(ParseFilterExpression, TrailingNotNegatesInOperator) {
+    // "Feature not in [...]" : the " in " operator splits first, leaving a trailing
+    // " not" on the field, which must negate the condition.
+    FilterCondition cond = parse_filter_expression("Feature not in ENST1,ENST2");
+    EXPECT_EQ(cond.field, "Feature");
+    EXPECT_EQ(cond.op, FilterOperator::IN);
+    EXPECT_TRUE(cond.negated);
 }
 
 TEST(ParseFilterExpression, NoOperatorDefaultsToExists) {

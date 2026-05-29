@@ -184,11 +184,16 @@ inline std::vector<ConsequenceType> get_sv_consequences(
         bool affects_utr5 = false;
         bool affects_utr3 = false;
         bool affects_splice = false;
+        const bool is_minus = (transcript.strand == '-');
 
-        // Check each CDS region for coding impact
+        // Check each CDS region for coding impact, and sum the number of CODING
+        // bases the SV actually overlaps (not the full genomic span, which may
+        // include introns/UTRs). Frame disruption depends on coding bases only.
+        int coding_bp = 0;
         for (const auto& cds : transcript.cds_regions) {
             if (sv.overlaps(cds.start, cds.end)) {
                 affects_cds = true;
+                coding_bp += std::min(sv.end, cds.end) - std::max(sv.start, cds.start) + 1;
             }
         }
 
@@ -220,73 +225,78 @@ inline std::vector<ConsequenceType> get_sv_consequences(
             }
         }
 
+        // Strand-aware splice-site detection. Exons are genomic-sorted, so the
+        // low-coordinate intron boundary (exon.start side) is the ACCEPTOR on '+'
+        // but the DONOR on '-', and the high-coordinate boundary (exon.end side)
+        // is the DONOR on '+' but the ACCEPTOR on '-'.
+        auto detect_splice = [&](bool& hits_donor, bool& hits_acceptor) {
+            for (size_t i = 0; i < transcript.exons.size(); ++i) {
+                const auto& exon = transcript.exons[i];
+                if (i > 0 && sv.overlaps(exon.start - 2, exon.start - 1)) {
+                    if (is_minus) hits_donor = true; else hits_acceptor = true;
+                }
+                if (i + 1 < transcript.exons.size() && sv.overlaps(exon.end + 1, exon.end + 2)) {
+                    if (is_minus) hits_acceptor = true; else hits_donor = true;
+                }
+            }
+        };
+
         // Determine consequences based on SV type and affected regions
         if (sv.sv_type == SVType::DEL) {
             if (affects_splice) {
-                // Check which splice sites are affected (donor vs acceptor)
                 bool hits_donor = false, hits_acceptor = false;
-                for (size_t i = 0; i < transcript.exons.size(); ++i) {
-                    const auto& exon = transcript.exons[i];
-                    // Acceptor site: 2bp before exon start (exon_start-2 to exon_start-1)
-                    if (i > 0 && sv.overlaps(exon.start - 2, exon.start - 1)) {
-                        hits_acceptor = true;
-                    }
-                    // Donor site: 2bp after exon end (exon_end+1 to exon_end+2)
-                    if (i + 1 < transcript.exons.size() && sv.overlaps(exon.end + 1, exon.end + 2)) {
-                        hits_donor = true;
-                    }
-                }
-                if (hits_donor) {
-                    consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
-                }
-                if (hits_acceptor) {
-                    consequences.push_back(ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
-                }
+                detect_splice(hits_donor, hits_acceptor);
+                if (hits_donor) consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
+                if (hits_acceptor) consequences.push_back(ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
             }
             if (affects_cds) {
-                // Check if frameshift
-                int deleted_bp = sv.length();
-                if (deleted_bp % 3 != 0) {
+                // Frame disruption depends on the number of CODING bases deleted,
+                // not the full genomic span (which may include introns/UTRs).
+                if (coding_bp == 0) {
+                    consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
+                } else if (coding_bp % 3 != 0) {
                     consequences.push_back(ConsequenceType::FRAMESHIFT_VARIANT);
                 } else {
                     consequences.push_back(ConsequenceType::INFRAME_DELETION);
                 }
             }
-        } else if (sv.sv_type == SVType::INS || sv.sv_type == SVType::DUP || sv.sv_type == SVType::TDUP) {
+        } else if (sv.sv_type == SVType::INS) {
             if (affects_splice) {
-                // Check if insertion/dup falls on the canonical splice dinucleotide
                 bool hits_donor = false, hits_acceptor = false;
-                for (size_t i = 0; i < transcript.exons.size(); ++i) {
-                    const auto& exon = transcript.exons[i];
-                    if (i > 0 && sv.overlaps(exon.start - 2, exon.start - 1)) {
-                        hits_acceptor = true;
-                    }
-                    if (i + 1 < transcript.exons.size() && sv.overlaps(exon.end + 1, exon.end + 2)) {
-                        hits_donor = true;
-                    }
-                }
-                if (hits_donor) {
-                    consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
-                }
-                if (hits_acceptor) {
-                    consequences.push_back(ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
-                }
+                detect_splice(hits_donor, hits_acceptor);
+                if (hits_donor) consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
+                if (hits_acceptor) consequences.push_back(ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
                 if (!hits_donor && !hits_acceptor) {
                     consequences.push_back(ConsequenceType::SPLICE_REGION_VARIANT);
                 }
             }
             if (affects_cds) {
-                if (sv.sv_type == SVType::INS && sv.sv_len == 0) {
+                if (sv.sv_len == 0) {
                     // Unknown insertion length - can't determine frameshift/inframe
                     consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
+                } else if (sv.sv_len % 3 != 0) {
+                    consequences.push_back(ConsequenceType::FRAMESHIFT_VARIANT);
                 } else {
-                    int inserted_bp = sv.length();
-                    if (inserted_bp % 3 != 0) {
-                        consequences.push_back(ConsequenceType::FRAMESHIFT_VARIANT);
-                    } else {
-                        consequences.push_back(ConsequenceType::INFRAME_INSERTION);
-                    }
+                    consequences.push_back(ConsequenceType::INFRAME_INSERTION);
                 }
+            }
+        } else if (sv.sv_type == SVType::DUP || sv.sv_type == SVType::TDUP) {
+            // A partial (non-whole-transcript) duplication is not a clean insertion
+            // of novel sequence; its reading-frame effect depends on the duplicated
+            // CDS bases and the junction. Perl VEP does not call inframe/frameshift
+            // here, so emit feature-level terms instead.
+            if (affects_splice) {
+                bool hits_donor = false, hits_acceptor = false;
+                detect_splice(hits_donor, hits_acceptor);
+                if (hits_donor) consequences.push_back(ConsequenceType::SPLICE_DONOR_VARIANT);
+                if (hits_acceptor) consequences.push_back(ConsequenceType::SPLICE_ACCEPTOR_VARIANT);
+                if (!hits_donor && !hits_acceptor) {
+                    consequences.push_back(ConsequenceType::SPLICE_REGION_VARIANT);
+                }
+            }
+            if (affects_cds) {
+                consequences.push_back(ConsequenceType::FEATURE_ELONGATION);
+                consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
             }
         } else if (sv.sv_type == SVType::INV) {
             if (affects_cds) {
@@ -294,16 +304,23 @@ inline std::vector<ConsequenceType> get_sv_consequences(
             }
         } else if (sv.sv_type == SVType::CNV) {
             if (sv.copy_number == 0) {
-                // Complete deletion
+                // Complete loss
                 if (sv.contains(transcript.start, transcript.end)) {
                     consequences.push_back(ConsequenceType::TRANSCRIPT_ABLATION);
                 } else if (affects_cds) {
                     consequences.push_back(ConsequenceType::FRAMESHIFT_VARIANT);
                 }
             } else if (sv.copy_number > 2) {
-                // Duplication/amplification
+                // Gain / amplification
                 if (affects_cds) {
                     consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
+                }
+            } else if (affects_cds) {
+                // copy_number == 1 (single-copy loss) or == -1 (unknown CN): assign a
+                // coding effect directly so it is not lost to the UTR-gated fallback.
+                consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
+                if (!sv.contains(transcript.start, transcript.end)) {
+                    consequences.push_back(ConsequenceType::FEATURE_TRUNCATION);
                 }
             }
         }
@@ -388,6 +405,19 @@ inline StructuralVariant parse_sv_from_vcf(
         }
     }
 
+    // For VCF SYMBOLIC alleles (<DEL>, <DUP>, <INV>, <CNV>), POS is the padding
+    // base immediately BEFORE the event; the affected span is POS+1..END (VCF
+    // spec). Shift start so boundary overlaps are not off by one to the left.
+    // BND keeps POS (it is the actual breakend base); symbolic INS is handled
+    // separately (zero-length on the reference between POS and POS+1).
+    if (!alt.empty() && alt[0] == '<' &&
+        (sv.sv_type == SVType::DEL || sv.sv_type == SVType::DUP ||
+         sv.sv_type == SVType::TDUP || sv.sv_type == SVType::INV ||
+         sv.sv_type == SVType::CNV) &&
+        sv.end > pos) {
+        sv.start = pos + 1;
+    }
+
     // Get SVLEN
     auto svlen_it = info.find("SVLEN");
     if (svlen_it != info.end()) {
@@ -408,11 +438,11 @@ inline StructuralVariant parse_sv_from_vcf(
             sv.sv_len = -(sv.end - sv.start + 1);
         } else if (sv.sv_type == SVType::DUP) {
             sv.sv_len = sv.end - sv.start + 1;
-        } else if (sv.sv_type == SVType::INS && sv.end != sv.start) {
-            // Only calculate INS length when END was explicitly provided
-            sv.sv_len = sv.end - sv.start + 1;
         }
-        // For symbolic INS without SVLEN and without END, sv_len stays 0 (unknown)
+        // For an INS, the inserted length is the length of NOVEL sequence (SVLEN or
+        // the explicit ALT), never the reference interval END-POS. With neither
+        // present, sv_len stays 0 (unknown) -> routed to coding_sequence_variant
+        // rather than guessing frameshift/inframe from a reference span.
     }
 
     // Get copy number for CNV
@@ -450,10 +480,13 @@ inline StructuralVariant parse_sv_from_vcf(
                 } catch (const std::exception&) {}
             }
 
-            // VCF BND orientation: sequence before brackets = forward on local end
-            // t[p[ or t]p] = forward (bases before first bracket)
-            // ]p]t or [p[t = reverse complement (bases after last bracket)
-            sv.bnd_mate_forward = (bracket_pos > 0);
+            // VCF BND join orientation is encoded by the bracket CHARACTER, not by
+            // whether the base precedes the bracket. '[' (t[p[ , [p[t) joins to the
+            // forward strand after the mate position; ']' (t]p] , ]p]t) joins to the
+            // reverse. Decoding from position alone collapsed two of the four
+            // canonical forms incorrectly.
+            char br = (alt.find('[') != std::string::npos) ? '[' : ']';
+            sv.bnd_mate_forward = (br == '[');
         }
     }
 

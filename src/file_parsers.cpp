@@ -9,6 +9,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <atomic>
 #include <mutex>
 #include <sys/stat.h>
@@ -48,13 +49,24 @@ std::vector<std::string> split_line(const std::string& line, char delim) {
 std::unordered_map<std::string, std::string> parse_gff3_attributes(const std::string& attrs) {
     std::unordered_map<std::string, std::string> result;
 
+    // Trim surrounding whitespace (and stray CR from CRLF files). Strictly
+    // spec-compliant Ensembl GFF3 has no spaces around '=' or ';', but lenient
+    // producers emit "ID = foo; Name = bar"; without trimming the reserved-key
+    // lookups (ID/Name/Parent) would miss and silently drop feature ids/names.
+    auto trim = [](const std::string& s) -> std::string {
+        size_t b = s.find_first_not_of(" \t\r");
+        if (b == std::string::npos) return std::string();
+        size_t e = s.find_last_not_of(" \t\r");
+        return s.substr(b, e - b + 1);
+    };
+
     auto fields = split_line(attrs, ';');
     for (const auto& field : fields) {
         size_t eq = field.find('=');
         if (eq != std::string::npos) {
-            std::string key = field.substr(0, eq);
-            std::string value = url_decode(field.substr(eq + 1));
-            result[key] = value;
+            std::string key = trim(field.substr(0, eq));
+            std::string value = url_decode(trim(field.substr(eq + 1)));
+            if (!key.empty()) result[key] = value;
         }
     }
 
@@ -126,6 +138,10 @@ struct TabixTSVReader::Impl {
     int chrom_col = 0;
     int pos_col = 1;
     bool valid = false;
+    // Naming convention of the index, learned from the first non-empty query:
+    // 0 = unknown (try both), 1 = "chr"-prefixed, 2 = bare contig names.
+    // Once known, query_range issues a single tabix lookup instead of two.
+    int chrom_style = 0;
 
     ~Impl() {
         if (tbx) tbx_destroy(tbx);
@@ -212,11 +228,18 @@ std::vector<std::map<std::string, std::string>> TabixTSVReader::query_range(
 
     if (!pimpl_->valid) return results;
 
-    // Try different chromosome formats
+    // Try chromosome name formats. Once the index's naming convention is known
+    // (learned from the first non-empty query), issue only the matching format —
+    // a single tabix lookup instead of speculatively trying both per variant.
+    const std::string bare = (chrom.substr(0, 3) == "chr") ? chrom.substr(3) : chrom;
     std::vector<std::string> chrom_variants;
-    if (chrom.substr(0, 3) == "chr") {
+    if (pimpl_->chrom_style == 1) {
+        chrom_variants.push_back("chr" + bare);
+    } else if (pimpl_->chrom_style == 2) {
+        chrom_variants.push_back(bare);
+    } else if (chrom.substr(0, 3) == "chr") {
         chrom_variants.push_back(chrom);
-        chrom_variants.push_back(chrom.substr(3));
+        chrom_variants.push_back(bare);
     } else {
         chrom_variants.push_back("chr" + chrom);
         chrom_variants.push_back(chrom);
@@ -243,7 +266,12 @@ std::vector<std::map<std::string, std::string>> TabixTSVReader::query_range(
             results.push_back(std::move(row));
         }
 
-        if (!results.empty()) break;
+        if (!results.empty()) {
+            if (pimpl_->chrom_style == 0) {
+                pimpl_->chrom_style = (try_chrom.substr(0, 3) == "chr") ? 1 : 2;
+            }
+            break;
+        }
     }
 
     return results;

@@ -15,7 +15,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Build options
-option(ENABLE_NATIVE "Enable -march=native for optimized builds" ON)
+# Off by default: -march=native produces host-CPU-only binaries that SIGILL on
+# older/different CPUs (clusters, containers, distributed installs). Opt in with
+# -DENABLE_NATIVE=ON only when the binary runs on the same microarchitecture.
+option(ENABLE_NATIVE "Enable -march=native (host-CPU-only, non-portable binaries)" OFF)
 option(ENABLE_LTO "Enable Link Time Optimization for Release builds" ON)
 option(ENABLE_SANITIZERS "Enable AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 
@@ -226,6 +229,7 @@ if(BUILD_TESTS)
         tests/test_structural_variant.cpp
         tests/test_exon_intron.cpp
         tests/test_annotation_sources.cpp
+        tests/test_review_fixes_2026_05_29.cpp
     )
     target_link_libraries(vep_tests
         PRIVATE

@@ -70,6 +70,8 @@ struct HGVSParseResult {
     int end_pos = 0;
     int intron_offset = 0;       // For intronic positions like c.123+5
     int end_intron_offset = 0;   // For end-position intronic offset like c.123+5_130+2del
+    bool is_utr3 = false;        // start_pos is a 3'UTR position (c.*N, N bases past the stop)
+    bool end_is_utr3 = false;    // end_pos is a 3'UTR position (for ranges like c.*1_*5)
 
     // Alleles
     std::string ref_allele;
@@ -275,6 +277,17 @@ inline HGVSParseResult parse_genomic_hgvs(const std::string& reference, const st
         return result;
     }
 
+    // Parse inversion: 140753336_140753340inv (coordinates only; alt is the
+    // reverse-complement of the spanned reference, filled in downstream).
+    static const std::regex inv_regex("(\\d+)_(\\d+)inv");
+    if (std::regex_match(change, match, inv_regex)) {
+        result.variant_type = HGVSVariantType::INVERSION;
+        result.start_pos = std::stoi(match[1].str());
+        result.end_pos = std::stoi(match[2].str());
+        result.valid = true;
+        return result;
+    }
+
     result.error_message = "Unrecognized genomic HGVS pattern: " + change;
     return result;
 }
@@ -292,22 +305,22 @@ inline HGVSParseResult parse_coding_hgvs(const std::string& reference, const std
     result.reference_id = reference;
     result.hgvs_type = HGVSType::CODING;
 
+    // Parse a c. position token, recording the 3'UTR '*' marker (e.g. c.*51 is 51
+    // bases past the stop codon) so it is not conflated with plain c.51.
+    auto parse_pos = [](const std::string& s, int& pos_out, bool& utr3_out) {
+        if (!s.empty() && s[0] == '*') { pos_out = std::stoi(s.substr(1)); utr3_out = true; }
+        else { pos_out = std::stoi(s); }
+    };
+
     // Parse substitution with optional intronic offset: 803C>T or 123+5G>A
     static const std::regex sub_regex("(-?\\*?\\d+)([+-]\\d+)?([ACGTacgt])>([ACGTacgt])");
     std::smatch match;
 
     if (std::regex_match(change, match, sub_regex)) {
         result.variant_type = HGVSVariantType::SUBSTITUTION;
-
-        std::string pos_str = match[1].str();
-        // Handle UTR positions (*123 for 3'UTR, -123 for 5'UTR)
-        if (!pos_str.empty() && pos_str[0] == '*') {
-            result.start_pos = std::stoi(pos_str.substr(1));
-            // Mark as 3'UTR position (positive value with flag)
-        } else {
-            result.start_pos = std::stoi(pos_str);
-        }
+        parse_pos(match[1].str(), result.start_pos, result.is_utr3);
         result.end_pos = result.start_pos;
+        result.end_is_utr3 = result.is_utr3;
 
         if (match[2].matched) {
             result.intron_offset = std::stoi(match[2].str());
@@ -332,30 +345,20 @@ inline HGVSParseResult parse_coding_hgvs(const std::string& reference, const std
     static const std::regex del_regex("(-?\\*?\\d+)([+-]\\d+)?(?:_(-?\\*?\\d+)([+-]\\d+)?)?del([ACGTacgt]*)");
     if (std::regex_match(change, match, del_regex)) {
         result.variant_type = HGVSVariantType::DELETION;
-
-        std::string pos_str = match[1].str();
-        if (!pos_str.empty() && pos_str[0] == '*') {
-            result.start_pos = std::stoi(pos_str.substr(1));
-        } else {
-            result.start_pos = std::stoi(pos_str);
-        }
+        parse_pos(match[1].str(), result.start_pos, result.is_utr3);
 
         if (match[2].matched) {
             result.intron_offset = std::stoi(match[2].str());
         }
 
         if (match[3].matched) {
-            std::string end_str = match[3].str();
-            if (!end_str.empty() && end_str[0] == '*') {
-                result.end_pos = std::stoi(end_str.substr(1));
-            } else {
-                result.end_pos = std::stoi(end_str);
-            }
+            parse_pos(match[3].str(), result.end_pos, result.end_is_utr3);
             if (match[4].matched) {
                 result.end_intron_offset = std::stoi(match[4].str());
             }
         } else {
             result.end_pos = result.start_pos;
+            result.end_is_utr3 = result.is_utr3;
         }
 
         result.ref_allele = match[5].str();
@@ -368,23 +371,15 @@ inline HGVSParseResult parse_coding_hgvs(const std::string& reference, const std
     static const std::regex ins_regex("(-?\\*?\\d+)([+-]\\d+)?_(-?\\*?\\d+)([+-]\\d+)?ins([ACGTacgt]+)");
     if (std::regex_match(change, match, ins_regex)) {
         result.variant_type = HGVSVariantType::INSERTION;
-
-        std::string pos_str = match[1].str();
-        if (!pos_str.empty() && pos_str[0] == '*') {
-            result.start_pos = std::stoi(pos_str.substr(1));
-        } else {
-            result.start_pos = std::stoi(pos_str);
-        }
+        parse_pos(match[1].str(), result.start_pos, result.is_utr3);
 
         if (match[2].matched) {
             result.intron_offset = std::stoi(match[2].str());
         }
 
-        std::string end_str = match[3].str();
-        if (!end_str.empty() && end_str[0] == '*') {
-            result.end_pos = std::stoi(end_str.substr(1));
-        } else {
-            result.end_pos = std::stoi(end_str);
+        parse_pos(match[3].str(), result.end_pos, result.end_is_utr3);
+        if (match[4].matched) {
+            result.end_intron_offset = std::stoi(match[4].str());
         }
 
         result.ref_allele = "";
@@ -397,30 +392,37 @@ inline HGVSParseResult parse_coding_hgvs(const std::string& reference, const std
     static const std::regex dup_regex("(-?\\*?\\d+)([+-]\\d+)?(?:_(-?\\*?\\d+)([+-]\\d+)?)?dup([ACGTacgt]*)");
     if (std::regex_match(change, match, dup_regex)) {
         result.variant_type = HGVSVariantType::DUPLICATION;
-
-        std::string pos_str = match[1].str();
-        if (!pos_str.empty() && pos_str[0] == '*') {
-            result.start_pos = std::stoi(pos_str.substr(1));
-        } else {
-            result.start_pos = std::stoi(pos_str);
-        }
+        parse_pos(match[1].str(), result.start_pos, result.is_utr3);
 
         if (match[2].matched) {
             result.intron_offset = std::stoi(match[2].str());
         }
 
         if (match[3].matched) {
-            std::string end_str = match[3].str();
-            if (!end_str.empty() && end_str[0] == '*') {
-                result.end_pos = std::stoi(end_str.substr(1));
-            } else {
-                result.end_pos = std::stoi(end_str);
+            parse_pos(match[3].str(), result.end_pos, result.end_is_utr3);
+            if (match[4].matched) {
+                result.end_intron_offset = std::stoi(match[4].str());
             }
         } else {
             result.end_pos = result.start_pos;
+            result.end_is_utr3 = result.is_utr3;
         }
 
         result.ref_allele = match[5].str();
+        result.valid = true;
+        return result;
+    }
+
+    // Parse inversion: c.100_110inv (coordinates only; the alt allele is the
+    // reverse-complement of the spanned reference and is filled in downstream
+    // once the transcript/genomic sequence is available).
+    static const std::regex inv_regex("(-?\\*?\\d+)([+-]\\d+)?_(-?\\*?\\d+)([+-]\\d+)?inv");
+    if (std::regex_match(change, match, inv_regex)) {
+        result.variant_type = HGVSVariantType::INVERSION;
+        parse_pos(match[1].str(), result.start_pos, result.is_utr3);
+        if (match[2].matched) result.intron_offset = std::stoi(match[2].str());
+        parse_pos(match[3].str(), result.end_pos, result.end_is_utr3);
+        if (match[4].matched) result.end_intron_offset = std::stoi(match[4].str());
         result.valid = true;
         return result;
     }
@@ -503,9 +505,11 @@ inline HGVSParseResult parse_protein_hgvs(const std::string& reference, const st
         return result;
     }
 
-    // Parse insertion: Gly12_Ala13insVal
-    static const std::regex ins_regex("([A-Z][a-z]{2}|[A-Z*])(\\d+)_([A-Z][a-z]{2}|[A-Z*])(\\d+)ins([A-Z][a-z]{2}|[A-Z*])+");
-    if (std::regex_search(change, match, ins_regex)) {
+    // Parse insertion: Gly12_Ala13insVal. Use regex_MATCH (not search) so trailing
+    // garbage is rejected, and capture the inserted residues in a group rather than
+    // a fragile substr.
+    static const std::regex ins_regex("([A-Z][a-z]{2}|[A-Z*])(\\d+)_([A-Z][a-z]{2}|[A-Z*])(\\d+)ins((?:[A-Z][a-z]{2}|[A-Z*])+)");
+    if (std::regex_match(change, match, ins_regex)) {
         result.variant_type = HGVSVariantType::INSERTION;
         if (match[1].str().size() == 1) {
             result.ref_aa = aa_one_to_three(match[1].str()[0]);
@@ -515,11 +519,7 @@ inline HGVSParseResult parse_protein_hgvs(const std::string& reference, const st
         result.protein_pos = std::stoi(match[2].str());
         result.start_pos = result.protein_pos;
         result.end_pos = std::stoi(match[4].str());
-        // Extract inserted AAs
-        size_t ins_pos = change.find("ins");
-        if (ins_pos != std::string::npos) {
-            result.alt_aa = change.substr(ins_pos + 3);
-        }
+        result.alt_aa = match[5].str();
         result.valid = true;
         return result;
     }
@@ -535,6 +535,47 @@ inline HGVSParseResult parse_protein_hgvs(const std::string& reference, const st
         }
         result.protein_pos = std::stoi(match[2].str());
         result.alt_aa = result.ref_aa;  // Synonymous
+        result.valid = true;
+        return result;
+    }
+
+    // Parse delins: Cys28delinsTrpVal or Cys28_Lys30delinsTrp
+    static const std::regex pdelins_regex(
+        "([A-Z][a-z]{2}|[A-Z*])(\\d+)(?:_([A-Z][a-z]{2}|[A-Z*])(\\d+))?delins((?:[A-Z][a-z]{2}|[A-Z*])+)");
+    if (std::regex_match(change, match, pdelins_regex)) {
+        result.variant_type = HGVSVariantType::DELINS;
+        result.ref_aa = match[1].str().size() == 1 ? aa_one_to_three(match[1].str()[0]) : match[1].str();
+        result.protein_pos = std::stoi(match[2].str());
+        result.start_pos = result.protein_pos;
+        result.end_pos = match[4].matched ? std::stoi(match[4].str()) : result.start_pos;
+        result.alt_aa = match[5].str();
+        result.valid = true;
+        return result;
+    }
+
+    // Parse duplication: Gly4dup or Gly4_Gln6dup
+    static const std::regex pdup_regex(
+        "([A-Z][a-z]{2}|[A-Z*])(\\d+)(?:_([A-Z][a-z]{2}|[A-Z*])(\\d+))?dup");
+    if (std::regex_match(change, match, pdup_regex)) {
+        result.variant_type = HGVSVariantType::DUPLICATION;
+        result.ref_aa = match[1].str().size() == 1 ? aa_one_to_three(match[1].str()[0]) : match[1].str();
+        result.protein_pos = std::stoi(match[2].str());
+        result.start_pos = result.protein_pos;
+        result.end_pos = match[4].matched ? std::stoi(match[4].str()) : result.start_pos;
+        result.valid = true;
+        return result;
+    }
+
+    // Parse extension / stop-loss: Ter110GlnextTer17 or *110Qext*17
+    static const std::regex pext_regex(
+        "(Ter|\\*)(\\d+)((?:[A-Z][a-z]{2})|[A-Z*])ext(?:Ter|\\*)(\\d+|\\?)");
+    if (std::regex_match(change, match, pext_regex)) {
+        result.variant_type = HGVSVariantType::DELINS;  // complex (no EXTENSION enum)
+        result.ref_aa = "Ter";
+        result.protein_pos = std::stoi(match[2].str());
+        result.start_pos = result.protein_pos;
+        result.end_pos = result.protein_pos;
+        result.alt_aa = match[3].str().size() == 1 ? aa_one_to_three(match[3].str()[0]) : match[3].str();
         result.valid = true;
         return result;
     }
@@ -791,8 +832,10 @@ inline std::string generate_hgvsg(const std::string& chrom, int pos,
     if (ref.size() == 1 && alt.size() == 1) {
         // Substitution
         result += std::to_string(pos) + ref + ">" + alt;
-    } else if (alt.empty() || (ref.size() > alt.size() && alt.size() <= 1)) {
-        // Deletion
+    } else if (alt.empty() || (ref.size() > 1 && alt.size() == 1 && ref[0] == alt[0])) {
+        // Deletion (pure, possibly VCF-anchored). A single-base alt that does NOT
+        // match the anchor base (e.g. ref=AGG, alt=C) is a delins, not a deletion,
+        // and falls through to the delins branch below so the inserted base is kept.
         int del_start = pos;
         int del_end = pos + static_cast<int>(ref.size()) - 1;
         // Strip VCF anchor base if present
@@ -804,8 +847,10 @@ inline std::string generate_hgvsg(const std::string& chrom, int pos,
         } else {
             result += std::to_string(del_start) + "_" + std::to_string(del_end) + "del";
         }
-    } else if (ref.empty() || (alt.size() > ref.size() && ref.size() <= 1)) {
-        // Insertion - check for duplication heuristic
+    } else if (ref.empty() || (alt.size() > 1 && ref.size() == 1 && ref[0] == alt[0])) {
+        // Insertion/duplication (pure, possibly VCF-anchored). A single-base ref that
+        // does NOT match the anchor base (e.g. ref=A, alt=GT) is a delins, not an
+        // insertion, and falls through to the delins branch below.
         std::string inserted = alt;
         if (!ref.empty() && ref.size() == 1) {
             inserted = alt.substr(1);

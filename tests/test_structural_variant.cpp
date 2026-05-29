@@ -650,7 +650,8 @@ TEST(ParseSVFromVCF, DeletionWithEnd) {
     std::map<std::string, std::string> info = {{"SVTYPE", "DEL"}, {"END", "2000"}};
     auto sv = parse_sv_from_vcf("chr1", 1000, "N", "<DEL>", info);
     EXPECT_EQ(sv.sv_type, SVType::DEL);
-    EXPECT_EQ(sv.start, 1000);
+    // Symbolic alleles: POS is the padding base, the event span is POS+1..END.
+    EXPECT_EQ(sv.start, 1001);
     EXPECT_EQ(sv.end, 2000);
     EXPECT_EQ(sv.chromosome, "chr1");
 }
@@ -814,9 +815,8 @@ TEST(CNVHandling, CN1Hemizygous) {
     EXPECT_EQ(sv.sv_type, SVType::CNV);
     EXPECT_EQ(sv.copy_number, 1);
     EXPECT_TRUE(sv.is_sv());
-    // CN1 is not 0, and not > 2, so no special DEL/DUP treatment by default
-    // but it's still a valid CNV
-    EXPECT_EQ(sv.start, 1000);
+    // Symbolic allele: event span is POS+1..END (POS is the padding base).
+    EXPECT_EQ(sv.start, 1001);
     EXPECT_EQ(sv.end, 2000);
 }
 

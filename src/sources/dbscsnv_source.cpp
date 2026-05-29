@@ -99,21 +99,23 @@ public:
                 annotations["dbscsnv:rf_score"] = rf_it->second;
             }
 
-            // Compute max score for interpretation
-            double ada = 0, rf = 0;
+            // Compute max score for interpretation. Track whether a score was
+            // actually parsed so a legitimate 0.0 is emitted rather than conflated
+            // with "missing" (the old `max_score > 0` guard dropped valid low scores).
+            double max_score = -1.0;
             try {
                 if (ada_it != record.end() && ada_it->second != ".") {
-                    ada = std::stod(ada_it->second);
+                    max_score = std::stod(ada_it->second);
                 }
             } catch (const std::exception&) {}
             try {
                 if (rf_it != record.end() && rf_it->second != ".") {
-                    rf = std::stod(rf_it->second);
+                    double rf = std::stod(rf_it->second);
+                    if (rf > max_score) max_score = rf;
                 }
             } catch (const std::exception&) {}
 
-            double max_score = std::max(ada, rf);
-            if (max_score > 0) {
+            if (max_score >= 0) {
                 char buf[32]; std::snprintf(buf, sizeof(buf), "%.4f", max_score);
                 annotations["dbscsnv:max_score"] = buf;
                 std::string pred = interpret_score(max_score);
@@ -189,12 +191,12 @@ public:
     std::string get_data_path() const override { return path_; }
 
     /**
-     * Interpret dbscSNV score
-     * @return "splice_altering" (>= 0.6), "possible" (>= 0.4), or ""
+     * Interpret dbscSNV score. Perl VEP uses only the >= 0.6 splice-altering
+     * cutoff; the non-standard 0.4 "possible" tier was removed for parity.
+     * @return "splice_altering" (>= 0.6) or "" otherwise
      */
     static std::string interpret_score(double score) {
         if (score >= 0.6) return "splice_altering";
-        if (score >= 0.4) return "possible";
         return "";
     }
 

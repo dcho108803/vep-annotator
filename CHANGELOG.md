@@ -2,6 +2,47 @@
 
 All notable changes to the VEP Annotator project are documented here.
 
+## [1.6.0] - 2026-05-29
+
+Comprehensive fix sweep addressing the remaining findings from the 2026-05-29 deep
+review (60 of 64 applied; 1199 tests passing). Highlights:
+
+### Fixed — correctness
+- **SpliceAI gene mismatch (HIGH)**: predictions were selected by VCF ALT-column index into the flat (allele×gene) list, returning the wrong gene's scores when multiple genes overlap. Now matched by allele AND the transcript's gene symbol; INFO key matched at field boundaries.
+- **LOFTEE not strand-aware (HIGH)**: donor/acceptor and the NON_CAN_SPLICE dinucleotide check used plus-strand genomic geometry, producing spurious NON_CAN_SPLICE (HC→LC) on nearly every minus-strand splice variant. Now strand-aware. INCOMPLETE_CDS now keys on `cds_start_NF`/`cds_end_NF` (it was dead code).
+- **Plugin use-after-unload (HIGH)**: the `PluginLoader` was destroyed (dlclose) while the annotator still held plugin-backed sources. It now outlives all annotators and loads once.
+- **SV strand/frame**: strand-aware splice donor/acceptor for SVs; frameshift/inframe now uses CDS-overlap bases (not the full genomic span); symbolic `<INS>` length no longer inflated; DUP/TDUP split from INS; CNV CN=1/unknown handled; symbolic SV start uses POS+1 (VCF spec); BND orientation decoded from bracket character.
+- **HGVS parser**: protein `delins`/`dup`/`ext` notation parsed; `inv` (c. and g.); insertion parsing uses `regex_match` (rejects malformed input); 3'UTR `*` positions flagged; end intronic offset stored for ins/dup.
+- **Minus-strand non-coding `n.` deletions** now produce correctly-ordered cDNA ranges.
+- **CDS 3'-shift off-by-one** for deletions in period>1 tandem repeats.
+- **Inframe delins** classified by net length (inframe_insertion/deletion) instead of always protein_altering_variant.
+- **--fork** worker exceptions now propagate (non-zero exit) instead of silent partial output.
+- **filter_vep**: `match`/`regex` are real regular-expression operators; `regex` reachable from `-f`; `--exclude-intronic` drops compound intronic terms; trailing-`not` negation; numeric/space handling hardened.
+- **Transcript pick**: deterministic tiebreaker by transcript_id; per-gene/per-allele output preserves input order; empty `--pick-order` errors.
+- **Output**: JSON rejects leading-zero bare numbers; deterministic JSON key order; case-collision guard; `escape_vcf` encodes newlines/control bytes; JSON `close()` flushes; colocated allele uses `-`.
+- Consequence terms now emitted most-severe-first.
+
+### Fixed — safety / portability / performance
+- UB: `std::toupper`/`isspace` on signed char routed through safe helpers (incl. FASTA load).
+- `-march=native` is now opt-in (`-DENABLE_NATIVE=ON`); default builds are portable.
+- Uninitialized struct members; `<climits>` include; GFF3 attribute trimming.
+- Interval-style transcript lookup (prefix-max-end + binary search) replacing the from-zero linear scan; `build_cds_sequence` returns a reference (no multi-kb copies); JSON per-transcript O(n²) buffer copy removed; gz output buffered (128KB); `sync_with_stdio(false)`; tabix chrom-naming detected once.
+- `--output-format` / `--terms` reject unknown values.
+
+### Known limitations (deferred, documented in code)
+- HGVSp for multi-codon MNVs and ≥2-codon in-frame indels reports only the first changed residue; deletions spanning an exon/intron boundary use a genomic-span splice. HGVSg is not 3'-shifted (HGVSc is). UTR/intronic insertions are not reported as duplications. These HGVS/codon parity refinements need dedicated test vectors and are deferred to avoid unvalidated changes to clinical notation.
+
+## [1.5.0] - 2026-05-29
+
+### Fixed
+- **Minus-strand multi-base CDS position (HIGH)**: a multi-base variant whose genomic-leftmost base lies outside the CDS (e.g. a minus-strand variant spanning the 3'UTR/CDS boundary) was mis-clamped to CDS position 1 and falsely reported as `start_lost`. CDS positions are now computed per affected base (`calculate_cds_position_range`), skipping intron/UTR bases, so the first/last affected CDS positions are correct on both strands and across exon/intron boundaries
+- **HGVSg delins dropped bases (HIGH)**: `generate_hgvsg` routed single-base-side delins (e.g. `ATG>C`, `A>GT`) into the deletion/insertion branch and silently dropped the inserted base(s). These now correctly emit `delins`
+- **Transcript filters dropping variants (HIGH)**: `--biotype`, `--coding-only`, `--canonical-only`, `--mane-only`, `--no-intergenic`, `--gencode-basic`, `--exclude-predicted`, and include/exclude-consequence filters used without a pick flag ran against only the single most-severe transcript, silently dropping variants whose matching transcript was not the most severe. Both the single-variant and batch paths now annotate all transcripts when any transcript-selecting filter is active (`TranscriptFilterConfig::requires_all_transcripts()`)
+- **Gene constraint never emitted**: `--pli` / `--loeuf` / `--constraint` loaded data but it was never queried; `pLI` and `LOEUF` are now looked up per gene (by Ensembl ID then symbol) and emitted in the output
+
+### Tests
+- 12 new regression tests (1174 → 1186 total), including end-to-end minus-strand 3'UTR/CDS boundary annotation
+
 ## [1.4.0] - 2026-03-09
 
 ### Fixed

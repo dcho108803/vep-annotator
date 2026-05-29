@@ -24,6 +24,10 @@
 
 namespace vep {
 
+// Safe whitespace test: std::isspace has UB on negative (signed) char values,
+// which occur for high-bit bytes in UTF-8 field names/values.
+inline bool is_space_c(char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; }
+
 /**
  * Filter operators
  */
@@ -58,10 +62,13 @@ inline FilterOperator parse_filter_operator(const std::string& op_str) {
     if (lower == "ge" || lower == ">=") return FilterOperator::GREATER_EQ;
     if (lower == "lt" || lower == "<") return FilterOperator::LESS;
     if (lower == "le" || lower == "<=") return FilterOperator::LESS_EQ;
-    if (lower == "contains" || lower == "match") return FilterOperator::CONTAINS;
+    if (lower == "contains") return FilterOperator::CONTAINS;
     if (lower == "in") return FilterOperator::IN;
     if (lower == "exists" || lower == "defined") return FilterOperator::EXISTS;
-    if (lower == "regex" || lower == "re") return FilterOperator::REGEX;
+    // Perl VEP's filter_vep 'match' is a regular-expression match (=~), not a
+    // substring test. Map match/regex/re to REGEX; apply_condition falls back to
+    // substring on an invalid pattern.
+    if (lower == "regex" || lower == "re" || lower == "match") return FilterOperator::REGEX;
 
     return FilterOperator::EQUALS;
 }
@@ -360,10 +367,32 @@ inline bool apply_filter(const FilterableRecord& record, const FilterConfig& con
         std::string consequence = record.get("CONSEQUENCE");
         if (consequence.empty()) consequence = record.get("Consequence");
         if (consequence.find("intron_variant") != std::string::npos) {
-            // Only filter if it's ONLY an intron variant
-            if (consequence == "intron_variant") {
-                return false;
+            // Exclude when the annotation is intronic in effect: intron_variant is
+            // present and every term is an intronic-context MODIFIER term. This drops
+            // compound terms like "intron_variant,non_coding_transcript_variant" but
+            // KEEPS more-severe combinations like "splice_region_variant,intron_variant".
+            static const std::set<std::string> intronic_context = {
+                "intron_variant", "non_coding_transcript_variant",
+                "NMD_transcript_variant", "coding_transcript_variant"
+            };
+            bool only_intronic = true;
+            size_t pos = 0;
+            while (pos < consequence.size()) {
+                size_t next = consequence.find_first_of(",&", pos);
+                std::string term = consequence.substr(
+                    pos, (next == std::string::npos ? consequence.size() : next) - pos);
+                // trim spaces
+                size_t b = term.find_first_not_of(' ');
+                size_t e = term.find_last_not_of(' ');
+                if (b != std::string::npos) term = term.substr(b, e - b + 1);
+                if (!term.empty() && !intronic_context.count(term)) {
+                    only_intronic = false;
+                    break;
+                }
+                if (next == std::string::npos) break;
+                pos = next + 1;
             }
+            if (only_intronic) return false;
         }
     }
 
@@ -430,6 +459,7 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
     operators.push_back(" contains ");
     operators.push_back(" in ");
     operators.push_back(" match ");
+    operators.push_back(" regex ");  // explicit regex operator (maps to REGEX)
     operators.push_back(" exists");
     operators.push_back(">=");
     operators.push_back("<=");
@@ -459,10 +489,10 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
     // Extract field
     cond.field = expr.substr(0, op_pos);
     // Trim whitespace
-    while (!cond.field.empty() && std::isspace(cond.field[cond.field.size() - 1])) {
+    while (!cond.field.empty() && is_space_c(cond.field[cond.field.size() - 1])) {
         cond.field.erase(cond.field.size() - 1);
     }
-    while (!cond.field.empty() && std::isspace(cond.field[0])) {
+    while (!cond.field.empty() && is_space_c(cond.field[0])) {
         cond.field.erase(0, 1);
     }
 
@@ -471,14 +501,22 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
         cond.field = cond.field.substr(4);
         cond.negated = true;
     }
+    // Handle "not" adjacent to the operator, e.g. "Feature not in [...]" or
+    // "X not contains Y": the operator (" in "/" contains ") splits first, leaving
+    // a trailing " not" on the field. Strip it and negate so the test inverts.
+    if (cond.field.size() > 4 && cond.field.substr(cond.field.size() - 4) == " not") {
+        cond.field.erase(cond.field.size() - 4);
+        while (!cond.field.empty() && is_space_c(cond.field.back())) cond.field.pop_back();
+        cond.negated = true;
+    }
 
     // Parse operator
     std::string op_str = found_op;
     // Trim whitespace
-    while (!op_str.empty() && std::isspace(op_str[op_str.size() - 1])) {
+    while (!op_str.empty() && is_space_c(op_str[op_str.size() - 1])) {
         op_str.erase(op_str.size() - 1);
     }
-    while (!op_str.empty() && std::isspace(op_str[0])) {
+    while (!op_str.empty() && is_space_c(op_str[0])) {
         op_str.erase(0, 1);
     }
 
@@ -488,10 +526,10 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
     if (op_pos + found_op.size() < expr.size()) {
         cond.value = expr.substr(op_pos + found_op.size());
         // Trim whitespace
-        while (!cond.value.empty() && std::isspace(cond.value[cond.value.size() - 1])) {
+        while (!cond.value.empty() && is_space_c(cond.value[cond.value.size() - 1])) {
             cond.value.erase(cond.value.size() - 1);
         }
-        while (!cond.value.empty() && std::isspace(cond.value[0])) {
+        while (!cond.value.empty() && is_space_c(cond.value[0])) {
             cond.value.erase(0, 1);
         }
 
@@ -501,10 +539,10 @@ inline FilterCondition parse_filter_expression(const std::string& expr) {
             std::string item;
             while (std::getline(iss, item, ',')) {
                 // Trim whitespace
-                while (!item.empty() && std::isspace(item[item.size() - 1])) {
+                while (!item.empty() && is_space_c(item[item.size() - 1])) {
                     item.erase(item.size() - 1);
                 }
-                while (!item.empty() && std::isspace(item[0])) {
+                while (!item.empty() && is_space_c(item[0])) {
                     item.erase(0, 1);
                 }
                 if (!item.empty()) {
@@ -534,10 +572,10 @@ inline std::unordered_set<std::string> load_gene_list(const std::string& filepat
         if (line.empty() || line[0] == '#') continue;
 
         // Trim whitespace
-        while (!line.empty() && std::isspace(line[line.size() - 1])) {
+        while (!line.empty() && is_space_c(line[line.size() - 1])) {
             line.erase(line.size() - 1);
         }
-        while (!line.empty() && std::isspace(line[0])) {
+        while (!line.empty() && is_space_c(line[0])) {
             line.erase(0, 1);
         }
 

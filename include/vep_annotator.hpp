@@ -188,9 +188,9 @@ inline std::string consequence_to_display_term(ConsequenceType type) {
  * Represents an exon within a transcript
  */
 struct Exon {
-    int start;          // 1-based, inclusive
-    int end;            // 1-based, inclusive
-    int exon_number;
+    int start = 0;      // 1-based, inclusive
+    int end = 0;        // 1-based, inclusive
+    int exon_number = 0;
     int phase = -1;     // Reading frame phase (0, 1, 2, or -1 if unknown)
 };
 
@@ -198,8 +198,8 @@ struct Exon {
  * Represents a CDS (coding sequence) region
  */
 struct CDS {
-    int start;
-    int end;
+    int start = 0;
+    int end = 0;
     int phase = 0;
 };
 
@@ -211,9 +211,9 @@ struct Transcript {
     std::string gene_id;
     std::string gene_name;
     std::string chromosome;
-    int start;
-    int end;
-    char strand;                    // '+' or '-'
+    int start = 0;
+    int end = 0;
+    char strand = '+';              // '+' or '-'
     std::string biotype;            // protein_coding, lncRNA, etc.
     bool is_canonical = false;
     std::string ccds_id;
@@ -247,9 +247,9 @@ struct Gene {
     std::string id;
     std::string name;
     std::string chromosome;
-    int start;
-    int end;
-    char strand;
+    int start = 0;
+    int end = 0;
+    char strand = '+';
     std::string biotype;
     std::string source;             // Gene source (e.g., "ensembl_havana", "havana")
     std::string hgnc_id;            // HGNC gene ID (e.g., "HGNC:1097")
@@ -745,9 +745,22 @@ private:
     int calculate_cds_position(int genomic_pos, const Transcript& transcript) const;
 
     /**
+     * Compute the first (lowest, in transcription order) and last (highest) CDS
+     * positions affected by a variant whose reference allele covers genomic
+     * [pos, pos + ref_len - 1]. Bases in introns or UTRs are skipped (they have
+     * no CDS position), so this is correct for variants that span a CDS/intron
+     * or CDS/UTR boundary on either strand. Returns {0, 0} if no reference base
+     * falls inside the CDS.
+     */
+    std::pair<int, int> calculate_cds_position_range(
+        int pos, int ref_len, const Transcript& transcript) const;
+
+    /**
      * Build the CDS sequence for a transcript (builds once, reuse everywhere)
      */
-    std::string build_cds_sequence(const std::string& chrom, const Transcript& transcript) const;
+    // Returns a reference into the per-annotator CDS cache (the entry outlives every
+    // per-variant call). Avoids copying multi-kb CDS strings on each coding variant.
+    const std::string& build_cds_sequence(const std::string& chrom, const Transcript& transcript) const;
 
     /**
      * Get the codon affected by a variant

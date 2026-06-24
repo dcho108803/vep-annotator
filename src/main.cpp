@@ -390,6 +390,17 @@ enum class InputFormat { VCF, ENSEMBL, HGVS, BED, REGION, UNKNOWN };
 InputFormat detect_input_format(const std::string& line) {
     if (line.empty() || line[0] == '#') return InputFormat::UNKNOWN;
 
+    // A VCF data line is tab-delimited with at least 8 columns (>=7 tabs). Detect it
+    // FIRST: otherwise the whole-line HGVS/Region scans below can be tripped by VCF
+    // sample data -- a genotype "0/1" (has '/'), a FORMAT "GT:SM:CN" (has ':'), and a
+    // DRAGEN CNV id like "DRAGEN:LOSS:chr1:1000-2000" (has ':' and '-') together match
+    // the Region pattern, mis-classifying any multi-sample/DRAGEN VCF as Region.
+    {
+        int tabs = 0;
+        for (char c : line) if (c == '\t') tabs++;
+        if (tabs >= 7) return InputFormat::VCF;
+    }
+
     // HGVS: contains ':' followed by c./p./g./n./m. notation
     if (line.find(":c.") != std::string::npos || line.find(":p.") != std::string::npos ||
         line.find(":g.") != std::string::npos || line.find(":n.") != std::string::npos ||
@@ -2694,6 +2705,12 @@ int main(int argc, char* argv[]) {
                     // Skip empty alleles (malformed VCF)
                     if (single_alt.empty()) continue;
 
+                    // Skip gVCF non-variant placeholder alleles (reference blocks):
+                    // <NON_REF> (GATK/DRAGEN) and <*>. These are not real variants and
+                    // would otherwise be annotated spuriously; at WGS gVCF scale there
+                    // can be millions of them.
+                    if (single_alt == "<NON_REF>" || single_alt == "<*>") continue;
+
                     // Skip non-variant alleles unless allowed
                     if (!allow_non_variant && (single_alt == ref || single_alt == "." || single_alt == "*")) {
                         continue;
@@ -2735,8 +2752,9 @@ int main(int argc, char* argv[]) {
                     bool is_bnd = (single_alt.find('[') != std::string::npos || single_alt.find(']') != std::string::npos);
 
                     if (is_symbolic || is_bnd) {
-                        // Route to structural variant pipeline
-                        auto sv = vep::parse_sv_from_vcf(chrom, pos, ref, single_alt, info_map);
+                        // Route to structural variant pipeline. Pass FORMAT+sample
+                        // columns so DRAGEN CNV copy number (FORMAT CN) is available.
+                        auto sv = vep::parse_sv_from_vcf(chrom, pos, ref, single_alt, info_map, sample_columns);
 
                         // Get ALL overlapping transcripts for the full SV region
                         annotations.clear();

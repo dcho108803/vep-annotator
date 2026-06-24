@@ -60,6 +60,15 @@ enum class InputFormat { VCF, ENSEMBL, HGVS, BED, REGION, UNKNOWN };
 static InputFormat detect_input_format(const std::string& line) {
     if (line.empty() || line[0] == '#') return InputFormat::UNKNOWN;
 
+    // A VCF data line is tab-delimited with at least 8 columns (>=7 tabs). Detect it
+    // FIRST so VCF sample data (genotype "0/1", FORMAT "GT:SM:CN", DRAGEN ids like
+    // "DRAGEN:LOSS:chr1:1000-2000") can't be mistaken for HGVS/Region.
+    {
+        int tabs = 0;
+        for (char c : line) if (c == '\t') tabs++;
+        if (tabs >= 7) return InputFormat::VCF;
+    }
+
     // HGVS: contains ':' followed by c./p./g./n./m. notation
     if (line.find(":c.") != std::string::npos || line.find(":p.") != std::string::npos ||
         line.find(":g.") != std::string::npos || line.find(":n.") != std::string::npos ||
@@ -470,6 +479,21 @@ TEST(DetectInputFormat, HGVSMitochondrialNotation) {
 TEST(DetectInputFormat, VCFDataLine) {
     // VCF: CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO (at least 4 tabs)
     EXPECT_EQ(detect_input_format("chr17\t7675088\t.\tC\tT\t100\tPASS\t."), InputFormat::VCF);
+}
+
+TEST(DetectInputFormat, MultiSampleVCFNotRegion) {
+    // A multi-sample VCF data line contains a genotype "0/1" ('/'), FORMAT ':'s,
+    // and possibly a '-'; the whole-line Region scan must not claim it.
+    EXPECT_EQ(detect_input_format(
+        "20\t1500\t.\tC\tT\t.\tPASS\tAC=1\tGT:AD:DP\t0/1:10,5:15"), InputFormat::VCF);
+}
+
+TEST(DetectInputFormat, DragenCnvVcfNotRegion) {
+    // DRAGEN CNV: id "DRAGEN:LOSS:20:500-2500" looks like a CHR:START-END region,
+    // and the FORMAT/sample add ':' and '/'. Must still be detected as VCF.
+    EXPECT_EQ(detect_input_format(
+        "20\t500\tDRAGEN:LOSS:20:500-2500\tN\t<DEL>\t.\tPASS\tSVTYPE=CNV;END=2500\tGT:SM:CN\t0/1:0.5:1"),
+        InputFormat::VCF);
 }
 
 TEST(DetectInputFormat, VCFMinimalFields) {

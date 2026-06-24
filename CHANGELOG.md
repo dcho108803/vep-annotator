@@ -2,6 +2,21 @@
 
 All notable changes to the VEP Annotator project are documented here.
 
+## [1.7.0] - 2026-06-23
+
+WGS / DRAGEN VCF support.
+
+### Fixed
+- **Multi-sample / DRAGEN VCF mis-detected as Region format** (data-loss bug): `detect_input_format` scanned the whole line for the Region pattern (`:` … `-` … `/`) before the VCF tab check, so a genotype like `0/1` plus a DRAGEN CNV id (`DRAGEN:LOSS:chr1:1000-2000`) made an entire VCF parse as "Region" and annotate **zero** variants. A line with ≥7 tabs is now classified as VCF first.
+
+### Added
+- **DRAGEN CNV copy number from FORMAT**: `CN` is read from the per-sample FORMAT field (DRAGEN reports it there with `SVTYPE=CNV` in INFO), in addition to INFO `CN` and `<CNn>` ALT. CNV consequences now use it: whole-gene loss (CN 0/1) → `transcript_ablation`, whole-gene gain (CN>2) → `transcript_amplification`, partial → coding/`feature_truncation`.
+- **Compound symbolic SV ALTs**: `<DEL:ME>`, `<INS:ME:ALU>`, `<CNV:TR>`, `<DUP:INT>` etc. are now classified by their base type (`<DUP:TANDEM>` still maps to TDUP).
+- **gVCF reference blocks skipped**: `<NON_REF>` and `<*>` placeholder alleles are no longer annotated as spurious variants — correctness and throughput for WGS gVCF input.
+
+### Tests
+- +7 (1202 → 1209), incl. DRAGEN CNV FORMAT extraction, compound SV types, and the multi-sample/DRAGEN format-detection regression.
+
 ## [1.6.1] - 2026-06-23
 
 ### Fixed

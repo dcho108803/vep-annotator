@@ -61,20 +61,71 @@ inline SVType parse_sv_type(const std::string& type_str) {
         clean = clean.substr(1, clean.size() - 2);
     }
 
-    if (clean == "INS") return SVType::INS;
-    if (clean == "DEL") return SVType::DEL;
-    if (clean == "DUP") return SVType::DUP;
+    // Tandem duplication is a distinct subtype.
     if (clean == "TDUP" || clean == "DUP:TANDEM") return SVType::TDUP;
-    if (clean == "INV") return SVType::INV;
-    if (clean == "CNV") return SVType::CNV;
-    if (clean == "BND") return SVType::BND;
+
+    // Compound symbolic subtypes (VCF allows DEL:ME, INS:ME:ALU, CNV:TR, DUP:INT,
+    // etc., emitted by DRAGEN/Manta/MELT). Classify by the base type before the
+    // first ':' so the subtype is mapped to its parent SV class.
+    std::string base = clean;
+    size_t colon = base.find(':');
+    if (colon != std::string::npos) base = base.substr(0, colon);
+
+    if (base == "INS") return SVType::INS;
+    if (base == "DEL") return SVType::DEL;
+    if (base == "DUP") return SVType::DUP;
+    if (base == "INV") return SVType::INV;
+    if (base == "CNV") return SVType::CNV;
+    if (base == "BND") return SVType::BND;
 
     // Handle copy number values: CN0, CN1, CN2, etc.
-    if (clean.size() >= 2 && clean.substr(0, 2) == "CN") {
+    if (base.size() >= 2 && base.substr(0, 2) == "CN") {
         return SVType::CNV;
     }
 
     return SVType::UNKNOWN;
+}
+
+/**
+ * Extract a per-sample FORMAT field value (e.g. DRAGEN CNV copy number "CN").
+ * @param sample_data Tab-joined "FORMAT\tSAMPLE1[\tSAMPLE2...]" string (col 9+).
+ * @param key FORMAT key to look up (e.g. "CN").
+ * @return The value from the FIRST sample, or "" if absent.
+ */
+inline std::string get_format_value(const std::string& sample_data, const std::string& key) {
+    size_t tab = sample_data.find('\t');
+    if (tab == std::string::npos) return "";
+    std::string fmt = sample_data.substr(0, tab);
+    std::string sample = sample_data.substr(tab + 1);
+    size_t tab2 = sample.find('\t');
+    if (tab2 != std::string::npos) sample = sample.substr(0, tab2);  // first sample only
+
+    auto nth_token = [](const std::string& s, int n) -> std::string {
+        size_t start = 0;
+        int i = 0;
+        while (true) {
+            size_t c = s.find(':', start);
+            std::string tok = s.substr(start, (c == std::string::npos ? s.size() : c) - start);
+            if (i == n) return tok;
+            if (c == std::string::npos) return "";
+            start = c + 1;
+            ++i;
+        }
+    };
+
+    // Find the index of `key` in the FORMAT column.
+    int idx = -1, i = 0;
+    size_t start = 0;
+    while (true) {
+        size_t c = fmt.find(':', start);
+        std::string tok = fmt.substr(start, (c == std::string::npos ? fmt.size() : c) - start);
+        if (tok == key) { idx = i; break; }
+        if (c == std::string::npos) break;
+        start = c + 1;
+        ++i;
+    }
+    if (idx < 0) return "";
+    return nth_token(sample, idx);
 }
 
 /**
@@ -303,23 +354,35 @@ inline std::vector<ConsequenceType> get_sv_consequences(
                 consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
             }
         } else if (sv.sv_type == SVType::CNV) {
+            const bool whole = sv.contains(transcript.start, transcript.end);
             if (sv.copy_number == 0) {
-                // Complete loss
-                if (sv.contains(transcript.start, transcript.end)) {
+                // Homozygous loss
+                if (whole) {
                     consequences.push_back(ConsequenceType::TRANSCRIPT_ABLATION);
                 } else if (affects_cds) {
                     consequences.push_back(ConsequenceType::FRAMESHIFT_VARIANT);
                 }
+            } else if (sv.copy_number == 1) {
+                // Heterozygous loss: a copy of the transcript is deleted. Whole-gene
+                // loss is transcript_ablation; partial loss truncates the feature.
+                if (whole) {
+                    consequences.push_back(ConsequenceType::TRANSCRIPT_ABLATION);
+                } else if (affects_cds) {
+                    consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
+                    consequences.push_back(ConsequenceType::FEATURE_TRUNCATION);
+                }
             } else if (sv.copy_number > 2) {
-                // Gain / amplification
-                if (affects_cds) {
+                // Copy-number gain. Whole-gene gain is transcript_amplification.
+                if (whole) {
+                    consequences.push_back(ConsequenceType::TRANSCRIPT_AMPLIFICATION);
+                } else if (affects_cds) {
                     consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
                 }
             } else if (affects_cds) {
-                // copy_number == 1 (single-copy loss) or == -1 (unknown CN): assign a
-                // coding effect directly so it is not lost to the UTR-gated fallback.
+                // Unknown copy number (-1) or neutral CN==2: conservative coding effect
+                // so it is not lost to the UTR-gated empty() fallback.
                 consequences.push_back(ConsequenceType::CODING_SEQUENCE_VARIANT);
-                if (!sv.contains(transcript.start, transcript.end)) {
+                if (!whole) {
                     consequences.push_back(ConsequenceType::FEATURE_TRUNCATION);
                 }
             }
@@ -370,7 +433,8 @@ inline StructuralVariant parse_sv_from_vcf(
     int pos,
     const std::string& ref,
     const std::string& alt,
-    const std::map<std::string, std::string>& info) {
+    const std::map<std::string, std::string>& info,
+    const std::string& sample_data = "") {
 
     StructuralVariant sv;
     sv.chromosome = chrom;
@@ -445,17 +509,27 @@ inline StructuralVariant parse_sv_from_vcf(
         // rather than guessing frameshift/inframe from a reference span.
     }
 
-    // Get copy number for CNV
+    // Get copy number for CNV. Precedence: INFO CN, then <CNn> ALT, then the
+    // per-sample FORMAT CN field. DRAGEN's CNV caller reports the estimated copy
+    // number ONLY in FORMAT (GT:SM:CN:BC:PE), with SVTYPE=CNV in INFO, so without
+    // this a DRAGEN CNV loses its copy number and its loss/gain consequence.
     auto cn_it = info.find("CN");
     if (cn_it != info.end()) {
         try {
             sv.copy_number = std::stoi(cn_it->second);
         } catch (const std::exception&) {}
-    } else {
-        // Try to parse from alt allele (e.g., <CN0>, <CN3>)
-        if (alt.size() > 3 && alt.substr(0, 3) == "<CN") {
+    } else if (alt.size() > 3 && alt.substr(0, 3) == "<CN") {
+        // Symbolic copy-number ALT (e.g. <CN0>, <CN3>)
+        try {
+            sv.copy_number = std::stoi(alt.substr(3, alt.size() - 4));
+        } catch (const std::exception&) {}
+    }
+    if (sv.copy_number < 0 && !sample_data.empty()) {
+        std::string cn = get_format_value(sample_data, "CN");
+        if (!cn.empty() && cn != ".") {
             try {
-                sv.copy_number = std::stoi(alt.substr(3, alt.size() - 4));
+                // CN may carry a trailing decimal in some callers; take the integer part.
+                sv.copy_number = std::stoi(cn);
             } catch (const std::exception&) {}
         }
     }

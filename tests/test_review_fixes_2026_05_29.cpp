@@ -520,6 +520,54 @@ TEST(MultiCodonMNV, StopGainingMnvEmitsTer) {
     EXPECT_EQ(a.hgvsp.find("delins"), std::string::npos) << a.hgvsp;
 }
 
+// ============================================================================
+// WGS / DRAGEN VCF handling: compound symbolic SV types, CNV copy number in
+// the FORMAT field, whole-gene CNV ablation/amplification
+// ============================================================================
+
+TEST(DragenWgsFixes, CompoundSymbolicSvTypes) {
+    EXPECT_EQ(parse_sv_type("<DEL:ME>"), SVType::DEL);       // mobile-element deletion
+    EXPECT_EQ(parse_sv_type("<INS:ME:ALU>"), SVType::INS);   // ALU insertion
+    EXPECT_EQ(parse_sv_type("<CNV:TR>"), SVType::CNV);       // tandem-repeat CNV
+    EXPECT_EQ(parse_sv_type("<DUP:TANDEM>"), SVType::TDUP);  // tandem dup stays TDUP
+    EXPECT_EQ(parse_sv_type("<DUP:INT>"), SVType::DUP);      // interspersed dup -> DUP
+}
+
+TEST(DragenWgsFixes, FormatValueExtraction) {
+    std::string sd = "GT:SM:CN:BC:PE\t0/1:0.498:1:100:25,30";
+    EXPECT_EQ(get_format_value(sd, "CN"), "1");
+    EXPECT_EQ(get_format_value(sd, "GT"), "0/1");
+    EXPECT_EQ(get_format_value(sd, "PE"), "25,30");
+    EXPECT_EQ(get_format_value(sd, "ZZ"), "");   // absent key
+}
+
+TEST(DragenWgsFixes, CnvCopyNumberFromFormat) {
+    // DRAGEN CNV: SVTYPE=CNV in INFO, copy number only in the FORMAT CN field.
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "2000"}};
+    std::string sd = "GT:SM:CN:BC:PE\t0/1:0.5:1:100:25,30";
+    auto sv = parse_sv_from_vcf("chr1", 1000, "N", "<DEL>", info, sd);
+    EXPECT_EQ(sv.sv_type, SVType::CNV);
+    EXPECT_EQ(sv.copy_number, 1);
+}
+
+TEST(DragenWgsFixes, CnvWholeGeneLossIsAblation) {
+    Transcript t = make_minus_sv_transcript();   // spans 1000..2100
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "3000"}};
+    auto sv = parse_sv_from_vcf("1", 500, "N", "<DEL>", info, "GT:CN\t0/1:1");
+    auto cons = get_sv_consequences(sv, t);
+    EXPECT_TRUE(std::find(cons.begin(), cons.end(),
+        ConsequenceType::TRANSCRIPT_ABLATION) != cons.end());
+}
+
+TEST(DragenWgsFixes, CnvWholeGeneGainIsAmplification) {
+    Transcript t = make_minus_sv_transcript();
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "3000"}};
+    auto sv = parse_sv_from_vcf("1", 500, "N", "<DUP>", info, "GT:CN\t0/1:4");
+    auto cons = get_sv_consequences(sv, t);
+    EXPECT_TRUE(std::find(cons.begin(), cons.end(),
+        ConsequenceType::TRANSCRIPT_AMPLIFICATION) != cons.end());
+}
+
 TEST(ExonIntronReviewFixes, MinusStrandPositionInFeature) {
     // Single exon 1000..1100 on the minus strand. position_in_feature is measured
     // from the high (transcript-5') coordinate: pos 1098 -> 1100-1098+1 = 3.

@@ -4,7 +4,7 @@ A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VE
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![Tests](https://img.shields.io/badge/tests-1201%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1202%20passing-brightgreen.svg)]()
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ git clone https://github.com/dcho108803/vep-annotator.git
 cd vep-annotator && mkdir build && cd build
 cmake .. && make -j4
 
-# Run tests (1201 tests)
+# Run tests (1202 tests)
 ./vep_tests
 
 # Annotate a single variant
@@ -172,7 +172,7 @@ Use `--annotation-tabix` instead of `--annotation` for large VCF files to minimi
 
 ## Testing
 
-1201 GoogleTest unit tests across 12 test suites:
+1202 GoogleTest unit tests across 12 test suites:
 
 | Test Suite | Tests | Coverage |
 |------------|------:|----------|
@@ -187,8 +187,8 @@ Use `--annotation-tabix` instead of `--annotation` for large VCF files to minimi
 | Codon Table | 35 | Translation, MT codons, completeness, case handling, edge cases |
 | Exon/Intron Numbers | 25 | Position calculation, formatting |
 | SpliceAI | 12 | Score parsing, cutoffs, thread safety |
-| Review Fixes (2026-05-29) | 27 | Minus-strand CDS/UTR boundary, HGVSg delins, filter all-transcripts, gene-constraint, SV strand/BND, HGVS inv/delins/ext, exon-intron strand |
-| **Total** | **1201** | |
+| Review Fixes (2026-05-29) | 28 | Minus-strand CDS/UTR boundary, HGVSg delins, filter all-transcripts, gene-constraint, SV strand/BND, HGVS inv/delins/ext, exon-intron strand |
+| **Total** | **1202** | |
 
 ```bash
 cd build && ./vep_tests

@@ -503,6 +503,23 @@ TEST(MultiCodonMNV, SingleChangedResidueInMnvIsMissense) {
     EXPECT_NE(a.hgvsp.find("Arg3Pro"), std::string::npos) << a.hgvsp;
 }
 
+TEST(MultiCodonMNV, StopGainingMnvEmitsTer) {
+    PlusStrandFixture fx;
+    VEPAnnotator annotator(fx.gtf_path, fx.fasta_path);
+
+    // 6bp MNV over codons 2,3: codon2 GTA (Val) kept, codon3 CGT (Arg) -> TAA (stop).
+    // HGVSp must be stop_gained at the stop position, not a missense/synonymous.
+    std::string ref = ref_substr(1103, 6);   // "GTACGT"
+    std::string alt = "GTATAA";
+
+    auto anns = annotator.annotate("20", 1103, ref, alt);
+    ASSERT_FALSE(anns.empty());
+    const auto& a = anns[0];
+    EXPECT_EQ(a.amino_acids, "VR/V*");
+    EXPECT_NE(a.hgvsp.find("Arg3Ter"), std::string::npos) << a.hgvsp;
+    EXPECT_EQ(a.hgvsp.find("delins"), std::string::npos) << a.hgvsp;
+}
+
 TEST(ExonIntronReviewFixes, MinusStrandPositionInFeature) {
     // Single exon 1000..1100 on the minus strand. position_in_feature is measured
     // from the high (transcript-5') coordinate: pos 1098 -> 1100-1098+1 = 3.

@@ -2213,20 +2213,19 @@ void VEPAnnotator::annotate_coding_region(
     // Multi-codon same-length MNV: the change spans >1 residue, so a single
     // missense term would drop the other changed residue(s). Emit a protein delins
     // over the CHANGED residue range (trimming unchanged flanking residues, which
-    // reduces to a single missense when exactly one residue changes), matching
-    // Perl VEP. The non-stop case is handled here; stop-gaining MNVs fall through.
+    // reduces to a single missense when exactly one residue changes); if the MNV
+    // introduces a premature stop, emit stop_gained at that position. Matches Perl VEP.
     if (ref.length() == alt.length() && ref_aa_str.length() > 1 &&
         ref_aa_str.length() == alt_aa_str.length()) {
-        int first = -1, last = -1;
-        bool has_stop = false;
+        int first = -1, last = -1, stop_idx = -1;
         for (size_t k = 0; k < alt_aa_str.length(); ++k) {
-            if (alt_aa_str[k] == '*') has_stop = true;
             if (ref_aa_str[k] != alt_aa_str[k]) {
                 if (first < 0) first = static_cast<int>(k);
                 last = static_cast<int>(k);
+                if (stop_idx < 0 && alt_aa_str[k] == '*') stop_idx = static_cast<int>(k);
             }
         }
-        if (first >= 0 && !has_stop) {
+        if (first >= 0) {
             std::string protein_ref;
             if (!transcript.protein_id.empty()) {
                 protein_ref = transcript.protein_id;
@@ -2235,6 +2234,14 @@ void VEPAnnotator::annotate_coding_region(
                 if (transcript_version_ && !transcript.version.empty()) {
                     protein_ref += "." + transcript.version;
                 }
+            }
+            if (stop_idx >= 0) {
+                // A residue in the MNV becomes a stop: stop_gained at that position
+                // (p.<originalAA><pos>Ter), the protein-truncating effect.
+                ann.hgvsp = protein_ref + ":p." +
+                            CodonTable::get_three_letter(ref_aa_str[stop_idx]) +
+                            std::to_string(ann.protein_position + stop_idx) + "Ter";
+                return;
             }
             int start_pp = ann.protein_position + first;
             std::string ref0 = CodonTable::get_three_letter(ref_aa_str[first]);

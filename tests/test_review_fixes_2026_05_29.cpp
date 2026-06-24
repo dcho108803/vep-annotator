@@ -244,6 +244,39 @@ struct MinusStrandFixture {
     }
 };
 
+// Plus-strand single-exon coding transcript on chr20, CDS 1100-1900, ACGT-pattern
+// genome (so codons are deterministic): CDS starts TAC GTA CGT ... = Tyr Val Arg ...
+struct PlusStrandFixture {
+    std::string gtf_path;
+    std::string fasta_path;
+    PlusStrandFixture() {
+        const std::string dir = ::testing::TempDir();
+        gtf_path = dir + "plus_strand_fix.gtf";
+        fasta_path = dir + "plus_strand_fix.fa";
+        {
+            std::ofstream g(gtf_path);
+            const char* attrs =
+                "gene_id \"ENSGP\"; transcript_id \"ENSTP\"; gene_name \"PLUSGENE\"; "
+                "gene_biotype \"protein_coding\"; transcript_biotype \"protein_coding\";";
+            g << "20\ttest\tgene\t1000\t2000\t.\t+\t.\t" << attrs << "\n";
+            g << "20\ttest\ttranscript\t1000\t2000\t.\t+\t.\t" << attrs << "\n";
+            g << "20\ttest\texon\t1000\t2000\t.\t+\t.\t" << attrs << "\n";
+            g << "20\ttest\tCDS\t1100\t1900\t.\t+\t0\t" << attrs << "\n";
+        }
+        {
+            std::ofstream f(fasta_path);
+            f << ">20\n";
+            std::string seq;
+            for (int p = 1; p <= 2100; ++p) seq += base_at(p);
+            for (size_t i = 0; i < seq.size(); i += 70) f << seq.substr(i, 70) << "\n";
+        }
+    }
+    ~PlusStrandFixture() {
+        std::remove(gtf_path.c_str());
+        std::remove(fasta_path.c_str());
+    }
+};
+
 bool has_consequence(const std::vector<VariantAnnotation>& anns, ConsequenceType c) {
     for (const auto& a : anns) {
         if (std::find(a.consequences.begin(), a.consequences.end(), c) != a.consequences.end()) {
@@ -426,6 +459,49 @@ TEST(SVReviewFixes, BndOrientationFromBracketChar) {
 // ============================================================================
 // Exon/intron numbering: strand-aware position_in_feature
 // ============================================================================
+
+// ============================================================================
+// Multi-codon MNV -> protein delins HGVSp (not a single truncated residue)
+// ============================================================================
+
+TEST(MultiCodonMNV, TwoCodonSubstitutionEmitsDelins) {
+    PlusStrandFixture fx;
+    VEPAnnotator annotator(fx.gtf_path, fx.fasta_path);
+
+    // CDS codons 2 and 3 are GTA (Val) and CGT (Arg), at genomic 1103-1108.
+    // Replace with AAA (Lys) and CCC (Pro): both residues change -> delins.
+    std::string ref = ref_substr(1103, 6);   // "GTACGT"
+    ASSERT_EQ(ref, "GTACGT");
+    std::string alt = "AAACCC";
+
+    auto anns = annotator.annotate("20", 1103, ref, alt);
+    ASSERT_FALSE(anns.empty());
+    const auto& a = anns[0];
+
+    // amino_acids carries both changed residues on each side.
+    EXPECT_EQ(a.amino_acids, "VR/KP");
+    // HGVSp must be a delins over the two-residue range, not a single missense.
+    EXPECT_NE(a.hgvsp.find("delins"), std::string::npos) << a.hgvsp;
+    EXPECT_NE(a.hgvsp.find("Val2_Arg3delinsLysPro"), std::string::npos) << a.hgvsp;
+}
+
+TEST(MultiCodonMNV, SingleChangedResidueInMnvIsMissense) {
+    PlusStrandFixture fx;
+    VEPAnnotator annotator(fx.gtf_path, fx.fasta_path);
+
+    // 6bp MNV spanning codons 2,3 but only changing codon 3 (CGT Arg -> CCC Pro):
+    // codon 2 GTA is left intact. After trimming, this is a single missense at pos 3.
+    std::string ref = ref_substr(1103, 6);   // "GTACGT"
+    std::string alt = "GTACCC";              // codon2 unchanged, codon3 CGT->CCC
+
+    auto anns = annotator.annotate("20", 1103, ref, alt);
+    ASSERT_FALSE(anns.empty());
+    const auto& a = anns[0];
+    EXPECT_EQ(a.amino_acids, "VR/VP");
+    // Trimmed to the single changed residue (Arg3 -> Pro), no delins.
+    EXPECT_EQ(a.hgvsp.find("delins"), std::string::npos) << a.hgvsp;
+    EXPECT_NE(a.hgvsp.find("Arg3Pro"), std::string::npos) << a.hgvsp;
+}
 
 TEST(ExonIntronReviewFixes, MinusStrandPositionInFeature) {
     // Single exon 1000..1100 on the minus strand. position_in_feature is measured

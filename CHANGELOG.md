@@ -2,6 +2,14 @@
 
 All notable changes to the VEP Annotator project are documented here.
 
+## [1.6.1] - 2026-06-23
+
+### Fixed
+- **Multi-codon MNV HGVSp** (was a deferred limitation in 1.6.0): a same-length substitution spanning more than one codon reported only the first changed residue (e.g. `p.Val2Lys` when two residues changed). It now emits a protein `delins` over the changed residue range — `p.Val2_Arg3delinsLysPro` — trimming unchanged flanking residues so a single net change still renders as a plain missense. Matches Perl VEP and the `AMINO_ACIDS` field. +2 end-to-end tests (1199 → 1201).
+
+### Still deferred
+- HGVSg 3'-shift; ≥2-codon in-frame indel HGVSp; deletion spanning an exon/intron boundary (codon math); UTR/intronic insertion duplication detection. These need dedicated Perl-VEP truth vectors.
+
 ## [1.6.0] - 2026-05-29
 
 Comprehensive fix sweep addressing the remaining findings from the 2026-05-29 deep

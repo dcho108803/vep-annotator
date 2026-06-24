@@ -2210,6 +2210,52 @@ void VEPAnnotator::annotate_coding_region(
         }
     }
 
+    // Multi-codon same-length MNV: the change spans >1 residue, so a single
+    // missense term would drop the other changed residue(s). Emit a protein delins
+    // over the CHANGED residue range (trimming unchanged flanking residues, which
+    // reduces to a single missense when exactly one residue changes), matching
+    // Perl VEP. The non-stop case is handled here; stop-gaining MNVs fall through.
+    if (ref.length() == alt.length() && ref_aa_str.length() > 1 &&
+        ref_aa_str.length() == alt_aa_str.length()) {
+        int first = -1, last = -1;
+        bool has_stop = false;
+        for (size_t k = 0; k < alt_aa_str.length(); ++k) {
+            if (alt_aa_str[k] == '*') has_stop = true;
+            if (ref_aa_str[k] != alt_aa_str[k]) {
+                if (first < 0) first = static_cast<int>(k);
+                last = static_cast<int>(k);
+            }
+        }
+        if (first >= 0 && !has_stop) {
+            std::string protein_ref;
+            if (!transcript.protein_id.empty()) {
+                protein_ref = transcript.protein_id;
+            } else {
+                protein_ref = transcript.id;
+                if (transcript_version_ && !transcript.version.empty()) {
+                    protein_ref += "." + transcript.version;
+                }
+            }
+            int start_pp = ann.protein_position + first;
+            std::string ref0 = CodonTable::get_three_letter(ref_aa_str[first]);
+            if (first == last) {
+                // Exactly one residue changes -> single missense
+                ann.hgvsp = protein_ref + ":p." + ref0 + std::to_string(start_pp) +
+                            CodonTable::get_three_letter(alt_aa_str[first]);
+            } else {
+                int end_pp = ann.protein_position + last;
+                std::string refL = CodonTable::get_three_letter(ref_aa_str[last]);
+                std::string alt_block;
+                for (int k = first; k <= last; ++k) {
+                    alt_block += CodonTable::get_three_letter(alt_aa_str[k]);
+                }
+                ann.hgvsp = protein_ref + ":p." + ref0 + std::to_string(start_pp) + "_" +
+                            refL + std::to_string(end_pp) + "delins" + alt_block;
+            }
+            return;
+        }
+    }
+
     ann.hgvsp = generate_hgvsp(
         CodonTable::get_three_letter(ref_aa_str[0]),
         CodonTable::get_three_letter(alt_aa_str[0]),

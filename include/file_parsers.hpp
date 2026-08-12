@@ -23,16 +23,23 @@
 namespace vep {
 
 /**
- * Normalize chromosome name (remove "chr" prefix for consistency)
+ * Normalize chromosome name (remove "chr" prefix for consistency).
+ * The mitochondrial contig is unified to "MT": UCSC references call it
+ * chrM while Ensembl/RefSeq call it MT, and keying on a single spelling
+ * lets a chrM-named VCF match an MT-named GTF/FASTA (and vice versa).
  */
 inline std::string normalize_chrom(const std::string& chrom) {
-    if (chrom.length() > 3 &&
-        (chrom[0] == 'c' || chrom[0] == 'C') &&
-        (chrom[1] == 'h' || chrom[1] == 'H') &&
-        (chrom[2] == 'r' || chrom[2] == 'R')) {
-        return chrom.substr(3);
+    std::string result = chrom;
+    if (result.length() > 3 &&
+        (result[0] == 'c' || result[0] == 'C') &&
+        (result[1] == 'h' || result[1] == 'H') &&
+        (result[2] == 'r' || result[2] == 'R')) {
+        result = result.substr(3);
     }
-    return chrom;
+    if (result == "M" || result == "m") {
+        return "MT";
+    }
+    return result;
 }
 
 // ============================================================================

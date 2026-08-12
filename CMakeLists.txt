@@ -230,6 +230,8 @@ if(BUILD_TESTS)
         tests/test_exon_intron.cpp
         tests/test_annotation_sources.cpp
         tests/test_review_fixes_2026_05_29.cpp
+        tests/test_mito.cpp
+        tests/test_cnv_annotation.cpp
     )
     target_link_libraries(vep_tests
         PRIVATE

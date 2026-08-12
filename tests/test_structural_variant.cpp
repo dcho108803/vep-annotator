@@ -926,3 +926,213 @@ TEST(SVConsequenceCompleteness, SVInIntronOnlyIntronVariant) {
     }
     EXPECT_TRUE(has_intron);
 }
+
+// ============================================================================
+// NEW TESTS: CNV/DEL/DUP consequence parity (2026-08 review fixes)
+// ============================================================================
+
+namespace {
+bool cons_has(const std::vector<ConsequenceType>& cons, ConsequenceType c) {
+    return std::find(cons.begin(), cons.end(), c) != cons.end();
+}
+} // namespace
+
+TEST(SVTypeParsing, NestedTandemDupSubtypes) {
+    // Nested tandem-dup subtypes keep their tandem class instead of falling
+    // through to plain DUP or UNKNOWN
+    EXPECT_EQ(parse_sv_type("<TDUP:ME>"), SVType::TDUP);
+    EXPECT_EQ(parse_sv_type("TDUP:X"), SVType::TDUP);
+    EXPECT_EQ(parse_sv_type("<DUP:TANDEM:AA>"), SVType::TDUP);
+    EXPECT_EQ(parse_sv_type("DUP:TANDEM:BB"), SVType::TDUP);
+    // Non-tandem DUP subtypes stay DUP
+    EXPECT_EQ(parse_sv_type("<DUP:INT>"), SVType::DUP);
+}
+
+TEST(CnvDelParity, WholeGeneCn1LossIsExactlyAblation) {
+    // CN=1 loss containing the whole transcript = transcript_ablation ONLY,
+    // with no 5'/3' UTR terms leaking past the early return (DEL parity)
+    Transcript t = make_coding_transcript();
+    t.exons.push_back({1000, 5000, 1, 0});
+    t.cds_regions.push_back({1200, 4800});
+
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "6000"}};
+    auto sv = parse_sv_from_vcf("chr1", 900, "N", "<DEL>", info, "GT:CN\t0/1:1");
+    ASSERT_EQ(sv.sv_type, SVType::CNV);
+    EXPECT_DOUBLE_EQ(sv.copy_number, 1.0);
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::TRANSCRIPT_ABLATION);
+}
+
+TEST(CnvDelParity, NonCodingWholeTranscriptLossIsAblation) {
+    // A CNV loss covering an entire non-coding transcript is transcript_ablation,
+    // exactly like the equivalent <DEL> (biotype-independent)
+    Transcript t;
+    t.id = "ENST_LNC";
+    t.chromosome = "chr1";
+    t.start = 1000;
+    t.end = 2000;
+    t.strand = '+';
+    t.biotype = "lincRNA";
+    t.exons.push_back({1000, 2000, 1, 0});
+
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "2500"}};
+    auto sv = parse_sv_from_vcf("chr1", 899, "N", "<DEL>", info, "GT:CN\t0/1:1");
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::TRANSCRIPT_ABLATION);
+}
+
+TEST(CnvDelParity, PartialLossGetsSpliceAndTruncation) {
+    // A CNV loss whose boundary removes a donor site reports the splice term
+    // and feature_truncation, like the same interval spelled SVTYPE=DEL
+    Transcript t = make_coding_transcript();
+    t.exons.push_back({1000, 2000, 1, 0});
+    t.exons.push_back({3000, 5000, 2, 0});
+    t.cds_regions.push_back({1200, 2000});
+    t.cds_regions.push_back({3000, 4800});
+
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "2100"}};
+    auto sv = parse_sv_from_vcf("chr1", 1499, "N", "<DEL>", info, "GT:CN\t0/1:1");
+
+    auto cons = get_sv_consequences(sv, t);
+    EXPECT_TRUE(cons_has(cons, ConsequenceType::SPLICE_DONOR_VARIANT));
+    EXPECT_TRUE(cons_has(cons, ConsequenceType::FEATURE_TRUNCATION));
+}
+
+TEST(CnvDelParity, UtrOnlyLossGetsTruncation) {
+    // A CNV loss clipping only 3'UTR sequence still truncates the feature
+    // (the DEL path emits feature_truncation for any partial overlap)
+    Transcript t = make_coding_transcript();
+    t.exons.push_back({1000, 5000, 1, 0});
+    t.cds_regions.push_back({1200, 4800});
+
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "5100"}};
+    auto sv = parse_sv_from_vcf("chr1", 4899, "N", "<DEL>", info, "GT:CN\t0/1:1");
+
+    auto cons = get_sv_consequences(sv, t);
+    EXPECT_TRUE(cons_has(cons, ConsequenceType::FEATURE_TRUNCATION));
+    EXPECT_TRUE(cons_has(cons, ConsequenceType::THREE_PRIME_UTR_VARIANT));
+}
+
+TEST(CnvDupParity, PartialGainGetsFeatureElongation) {
+    // A CNV gain duplicating part of the CDS gets feature_elongation like DUP
+    Transcript t = make_coding_transcript();
+    t.exons.push_back({1000, 5000, 1, 0});
+    t.cds_regions.push_back({1200, 4800});
+
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "2000"}};
+    auto sv = parse_sv_from_vcf("chr1", 1299, "N", "<DUP>", info, "GT:CN\t0/1:3");
+
+    auto cons = get_sv_consequences(sv, t);
+    EXPECT_TRUE(cons_has(cons, ConsequenceType::FEATURE_ELONGATION));
+    EXPECT_TRUE(cons_has(cons, ConsequenceType::CODING_SEQUENCE_VARIANT));
+}
+
+TEST(FractionalCopyNumber, MosaicGainIsAmplification) {
+    // Fractional CN from mosaic callers must not truncate to neutral 2
+    Transcript t = make_coding_transcript();
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "6000"}};
+    auto sv = parse_sv_from_vcf("chr1", 900, "N", "<CNV>", info, "GT:CN\t0/1:2.8");
+    EXPECT_DOUBLE_EQ(sv.copy_number, 2.8);
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::TRANSCRIPT_AMPLIFICATION);
+}
+
+TEST(FractionalCopyNumber, MosaicLossIsAblation) {
+    Transcript t = make_coding_transcript();
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "6000"}};
+    auto sv = parse_sv_from_vcf("chr1", 900, "N", "<CNV>", info, "GT:CN\t0/1:1.4");
+    EXPECT_DOUBLE_EQ(sv.copy_number, 1.4);
+
+    auto cons = get_sv_consequences(sv, t);
+    ASSERT_EQ(cons.size(), 1u);
+    EXPECT_EQ(cons[0], ConsequenceType::TRANSCRIPT_ABLATION);
+}
+
+TEST(FormatCnSelection, GtDirectedMultiSample) {
+    // Trio: the proband (0/1) carries the event; its CN wins over sample 1
+    EXPECT_EQ(select_format_cn("GT:CN\t0/0:2\t0/0:2\t0/1:0"), "0");
+}
+
+TEST(FormatCnSelection, MissingCarrierValueFallsThrough) {
+    // First sample's CN is missing; the carrier's value is still found
+    EXPECT_EQ(select_format_cn("GT:CN\t0/0:.\t0/1:1"), "1");
+}
+
+TEST(FormatCnSelection, UnanimousWithoutGt) {
+    EXPECT_EQ(select_format_cn("CN\t3\t3"), "3");
+}
+
+TEST(FormatCnSelection, DisagreementWithoutGtIsUnknown) {
+    // No genotype to attribute the event: conflicting CNs cannot be trusted
+    EXPECT_EQ(select_format_cn("CN\t2\t0"), "");
+}
+
+TEST(FormatCnSelection, MultiAllelicRecordIgnoresFormatCn) {
+    // A record-level CN cannot describe one allele of a multi-allelic record
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "2000"}};
+    auto sv = parse_sv_from_vcf("chr1", 1000, "N", "<DEL>", info, "GT:CN\t1/2:3", 2);
+    EXPECT_DOUBLE_EQ(sv.copy_number, -1.0);
+}
+
+// ============================================================================
+// NEW TESTS: SV output fields (--sv-fields)
+// ============================================================================
+
+TEST(SVOutputFields, DeletionFields) {
+    std::map<std::string, std::string> info = {{"SVTYPE", "DEL"}, {"END", "5000"}};
+    auto sv = parse_sv_from_vcf("chr1", 1000, "N", "<DEL>", info);
+
+    std::unordered_map<std::string, std::string> custom;
+    add_sv_output_fields(sv, custom);
+    EXPECT_EQ(custom["SV_TYPE"], "DEL");
+    EXPECT_EQ(custom["SV_END"], "5000");
+    EXPECT_FALSE(custom["SV_LEN"].empty());
+    EXPECT_EQ(custom.count("CN"), 0u);        // no copy number on a plain DEL
+    EXPECT_EQ(custom.count("BND_MATE"), 0u);
+}
+
+TEST(SVOutputFields, CnvCopyNumberFormatted) {
+    std::map<std::string, std::string> info = {{"SVTYPE", "CNV"}, {"END", "2000"}};
+    auto sv = parse_sv_from_vcf("chr1", 1000, "N", "<CNV>", info, "GT:CN\t0/1:3");
+    std::unordered_map<std::string, std::string> custom;
+    add_sv_output_fields(sv, custom);
+    EXPECT_EQ(custom["SV_TYPE"], "CNV");
+    EXPECT_EQ(custom["CN"], "3");             // integral CN prints as integer
+
+    auto sv2 = parse_sv_from_vcf("chr1", 1000, "N", "<CNV>", info, "GT:CN\t0/1:2.8");
+    custom.clear();
+    add_sv_output_fields(sv2, custom);
+    EXPECT_EQ(custom["CN"], "2.8");           // fractional CN keeps precision
+}
+
+TEST(SVOutputFields, BndMate) {
+    std::map<std::string, std::string> info;
+    auto sv = parse_sv_from_vcf("chr1", 100, "N", "N[chr2:12345[", info);
+    std::unordered_map<std::string, std::string> custom;
+    add_sv_output_fields(sv, custom);
+    EXPECT_EQ(custom["SV_TYPE"], "BND");
+    EXPECT_EQ(custom["BND_MATE"], "chr2:12345");
+    EXPECT_EQ(custom.count("SV_END"), 0u);    // interval end is meaningless for BND
+}
+
+TEST(SVOutputFields, UnknownInsertionLengthOmitted) {
+    std::map<std::string, std::string> info = {{"SVTYPE", "INS"}};
+    auto sv = parse_sv_from_vcf("chr1", 100, "N", "<INS>", info);
+    std::unordered_map<std::string, std::string> custom;
+    add_sv_output_fields(sv, custom);
+    EXPECT_EQ(custom["SV_TYPE"], "INS");
+    EXPECT_EQ(custom.count("SV_LEN"), 0u);    // unknown INS length stays absent
+}
+
+TEST(SVOutputFields, FormatCopyNumber) {
+    EXPECT_EQ(format_copy_number(0.0), "0");
+    EXPECT_EQ(format_copy_number(3.0), "3");
+    EXPECT_EQ(format_copy_number(2.8), "2.8");
+    EXPECT_EQ(format_copy_number(1.4), "1.4");
+}

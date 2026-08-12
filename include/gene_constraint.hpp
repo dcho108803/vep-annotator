@@ -67,7 +67,7 @@ struct GeneConstraint {
     double s_het = -1.0;        // Selection coefficient for heterozygotes
 
     bool has_data() const {
-        return pLI >= 0 || oe_lof_upper >= 0;
+        return pLI >= 0 || oe_lof_upper >= 0 || hi_score >= 0 || ts_score >= 0;
     }
 
     bool is_constrained() const {
@@ -229,6 +229,9 @@ public:
             // Haploinsufficiency
             constraint.hi_score = parse_double("hi_score");
             constraint.ts_score = parse_double("ts_score");
+            if (constraint.hi_score >= 0 || constraint.ts_score >= 0) {
+                has_dosage_ = true;
+            }
 
             // Selection coefficient
             constraint.s_het = parse_double("s_het");
@@ -333,6 +336,91 @@ public:
     }
 
     /**
+     * Load ClinGen gene dosage sensitivity curations.
+     *
+     * Accepts the ClinGen Gene Curation Results TSV (header row starts with
+     * "#Gene Symbol"; columns "Haploinsufficiency Score" and
+     * "Triplosensitivity Score"), or a simple format: GENE\tHI\tTS.
+     * Scores keep the ClinGen codes: 0-3 evidence levels, 30 (autosomal
+     * recessive), 40 (dosage sensitivity unlikely). Non-numeric entries
+     * ("Not yet evaluated") are skipped. Merges into existing gene entries.
+     */
+    bool load_clingen_dosage(const std::string& filepath) {
+        std::ifstream file(filepath);
+        if (!file.is_open()) {
+            return false;
+        }
+
+        std::string line;
+        int gene_col = 0, hi_col = 1, ts_col = 2;  // simple-format defaults
+        bool have_header_map = false;
+        bool seen_data = false;
+
+        auto split_tabs = [](const std::string& s) {
+            std::vector<std::string> f;
+            std::istringstream iss(s);
+            std::string tok;
+            while (std::getline(iss, tok, '\t')) f.push_back(tok);
+            return f;
+        };
+        auto parse_score = [](const std::string& v) -> double {
+            if (v.empty() || v == "." || v == "NA") return -1.0;
+            try {
+                return std::stod(v);
+            } catch (const std::exception&) {
+                return -1.0;
+            }
+        };
+
+        while (std::getline(file, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            if (line[0] == '#') {
+                // The ClinGen column header row is itself #-prefixed
+                if (line.compare(0, 12, "#Gene Symbol") == 0) {
+                    std::vector<std::string> cols = split_tabs(line.substr(1));
+                    for (size_t i = 0; i < cols.size(); ++i) {
+                        if (cols[i] == "Gene Symbol") gene_col = static_cast<int>(i);
+                        else if (cols[i] == "Haploinsufficiency Score") hi_col = static_cast<int>(i);
+                        else if (cols[i] == "Triplosensitivity Score") ts_col = static_cast<int>(i);
+                    }
+                    have_header_map = true;
+                }
+                continue;
+            }
+
+            std::vector<std::string> fields = split_tabs(line);
+            int max_col = std::max(gene_col, std::max(hi_col, ts_col));
+            if (static_cast<int>(fields.size()) <= max_col) continue;
+
+            const std::string& gene = fields[gene_col];
+            if (gene.empty()) continue;
+            double hi = parse_score(fields[hi_col]);
+            double ts = parse_score(fields[ts_col]);
+
+            // Simple-format header row ("GENE\tHI\tTS" and variants)
+            if (!seen_data && !have_header_map && hi < 0 && ts < 0) continue;
+            seen_data = true;
+            if (hi < 0 && ts < 0) continue;  // e.g. "Not yet evaluated"
+
+            GeneConstraint& c = gene_data_[gene];
+            if (c.gene_symbol.empty()) c.gene_symbol = gene;
+            if (hi >= 0) c.hi_score = hi;
+            if (ts >= 0) c.ts_score = ts;
+            has_dosage_ = true;
+        }
+
+        loaded_ = true;
+        return true;
+    }
+
+    /**
+     * True if any loaded gene carries a haploinsufficiency or
+     * triplosensitivity score
+     */
+    bool has_dosage_data() const { return has_dosage_; }
+
+    /**
      * Get constraint data by gene symbol
      */
     GeneConstraint get_by_symbol(const std::string& gene_symbol) const {
@@ -384,6 +472,7 @@ private:
     std::map<std::string, GeneConstraint> gene_data_;
     std::map<std::string, GeneConstraint> gene_id_data_;
     bool loaded_;
+    bool has_dosage_ = false;
 };
 
 /**

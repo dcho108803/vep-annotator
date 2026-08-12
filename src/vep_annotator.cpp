@@ -501,6 +501,16 @@ public:
             chrom_variants.push_back("chr" + chrom);
             chrom_variants.push_back(chrom);
         }
+        // The mito contig has two spellings (M vs MT); a tabix file may be
+        // indexed under either, so try the ones not already covered.
+        if (vep::normalize_chrom(chrom) == "MT") {
+            for (const char* v : {"MT", "chrMT", "M", "chrM"}) {
+                if (std::find(chrom_variants.begin(), chrom_variants.end(), v) ==
+                    chrom_variants.end()) {
+                    chrom_variants.push_back(v);
+                }
+            }
+        }
 
         for (const auto& try_chrom : chrom_variants) {
             // Build region string: chr:pos-pos
@@ -552,9 +562,7 @@ private:
         }
 
         // Normalize chromosome
-        if (record.chrom.size() > 3 && record.chrom.compare(0, 3, "chr") == 0) {
-            record.chrom = record.chrom.substr(3);
-        }
+        record.chrom = vep::normalize_chrom(record.chrom);
 
         // Parse alt alleles
         std::istringstream alt_iss(alt);
@@ -1040,9 +1048,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 current_chrom = line.substr(1, space_pos - 1);
 
                 // Normalize chromosome name (remove "chr" prefix for consistency)
-                if (current_chrom.size() > 3 && current_chrom.compare(0, 3, "chr") == 0) {
-                    current_chrom = current_chrom.substr(3);
-                }
+                current_chrom = vep::normalize_chrom(current_chrom);
 
                 current_seq.clear();
                 // No eager reserve: std::string growth is geometric (O(log n)
@@ -1089,9 +1095,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
                 size_t space_pos = line.find(' ');
                 current_chrom = line.substr(1, space_pos - 1);
 
-                if (current_chrom.size() > 3 && current_chrom.compare(0, 3, "chr") == 0) {
-                    current_chrom = current_chrom.substr(3);
-                }
+                current_chrom = vep::normalize_chrom(current_chrom);
 
                 current_seq.clear();
                 // No eager reserve (see note in the gzipped-FASTA branch above).
@@ -1113,10 +1117,7 @@ ReferenceGenome::ReferenceGenome(const std::string& fasta_path, bool load_all)
 ReferenceGenome::~ReferenceGenome() = default;
 
 std::string ReferenceGenome::get_sequence(const std::string& chrom, int start, int end) const {
-    std::string normalized_chrom = chrom;
-    if (normalized_chrom.size() > 3 && normalized_chrom.compare(0, 3, "chr") == 0) {
-        normalized_chrom = normalized_chrom.substr(3);
-    }
+    std::string normalized_chrom = vep::normalize_chrom(chrom);
 
     auto it = pimpl_->sequences.find(normalized_chrom);
     if (it == pimpl_->sequences.end()) {
@@ -1140,10 +1141,7 @@ std::string ReferenceGenome::get_sequence(const std::string& chrom, int start, i
 }
 
 char ReferenceGenome::get_base(const std::string& chrom, int pos) const {
-    std::string normalized_chrom = chrom;
-    if (normalized_chrom.size() > 3 && normalized_chrom.compare(0, 3, "chr") == 0) {
-        normalized_chrom = normalized_chrom.substr(3);
-    }
+    std::string normalized_chrom = vep::normalize_chrom(chrom);
     auto it = pimpl_->sequences.find(normalized_chrom);
     if (it == pimpl_->sequences.end()) return 'N';
     int idx = pos - 1; // Convert to 0-based
@@ -1152,18 +1150,12 @@ char ReferenceGenome::get_base(const std::string& chrom, int pos) const {
 }
 
 bool ReferenceGenome::has_chromosome(const std::string& chrom) const {
-    std::string normalized = chrom;
-    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
-        normalized = normalized.substr(3);
-    }
+    std::string normalized = vep::normalize_chrom(chrom);
     return pimpl_->sequences.find(normalized) != pimpl_->sequences.end();
 }
 
 int ReferenceGenome::get_chromosome_length(const std::string& chrom) const {
-    std::string normalized = chrom;
-    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
-        normalized = normalized.substr(3);
-    }
+    std::string normalized = vep::normalize_chrom(chrom);
     auto it = pimpl_->lengths.find(normalized);
     return (it != pimpl_->lengths.end()) ? it->second : 0;
 }
@@ -1318,9 +1310,7 @@ TranscriptDatabase::TranscriptDatabase(const std::string& gtf_path)
         std::getline(iss, attributes);
 
         // Normalize chromosome
-        if (chrom.size() > 3 && chrom.compare(0, 3, "chr") == 0) {
-            chrom = chrom.substr(3);
-        }
+        chrom = vep::normalize_chrom(chrom);
 
         char strand = strand_str[0];
         auto attrs = parse_gtf_attributes(attributes);
@@ -1523,10 +1513,7 @@ std::vector<const Transcript*> TranscriptDatabase::get_transcripts_at(
 std::vector<const Transcript*> TranscriptDatabase::get_transcripts_in_region(
     const std::string& chrom, int start, int end) const {
 
-    std::string normalized = chrom;
-    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
-        normalized = normalized.substr(3);
-    }
+    std::string normalized = vep::normalize_chrom(chrom);
 
     std::vector<const Transcript*> results;
 
@@ -1597,10 +1584,7 @@ std::vector<const Gene*> TranscriptDatabase::get_nearby_genes(
     const std::string& chrom, int pos, int distance) const {
 
     std::vector<const Gene*> results;
-    std::string normalized = chrom;
-    if (normalized.size() > 3 && normalized.compare(0, 3, "chr") == 0) {
-        normalized = normalized.substr(3);
-    }
+    std::string normalized = vep::normalize_chrom(chrom);
 
     // Look up the gene spatial index for this chromosome
     auto chrom_it = pimpl_->gene_chrom_index.find(normalized);

@@ -11,9 +11,12 @@
 #include "output_writer.hpp"
 #include "transcript_filter.hpp"
 #include "structural_variant.hpp"
+#include "sv_frequency.hpp"
+#include "acmg_cnv.hpp"
 #include "hgvs_parser.hpp"
 #include "gene_constraint.hpp"
 #include "exon_intron_numbers.hpp"
+#include "mito_annotation.hpp"
 #include "filter_vep.hpp"
 #include <iostream>
 #include <fstream>
@@ -112,7 +115,10 @@ void print_usage(const char* program_name) {
               << "Gene Constraint Scores:\n"
               << "  --constraint FILE       gnomAD gene constraint file (TSV)\n"
               << "  --pli FILE              pLI scores file (GENE\\tpLI)\n"
-              << "  --loeuf FILE            LOEUF scores file (GENE\\tLOEUF)\n\n"
+              << "  --loeuf FILE            LOEUF scores file (GENE\\tLOEUF)\n"
+              << "  --clingen-dosage FILE   ClinGen gene dosage curations (HI_SCORE/TS_SCORE\n"
+              << "                          columns; accepts the ClinGen Gene Curation\n"
+              << "                          Results TSV or simple GENE\\tHI\\tTS)\n\n"
               << "Plugins:\n"
               << "  --plugin PATH[:CONFIG]  Load plugin from shared library\n"
               << "  --plugin-dir DIR        Directory to search for plugins\n\n"
@@ -130,7 +136,22 @@ void print_usage(const char* program_name) {
               << "  --show-appris           Show APPRIS annotation\n"
               << "  --show-biotype          Show BIOTYPE in custom columns\n"
               << "  --variant-class         Add SO variant class (SNV, insertion, etc.)\n"
-              << "  --nearest               Add nearest gene for intergenic variants\n\n"
+              << "  --nearest               Add nearest gene for intergenic variants\n"
+              << "  --heteroplasmy          Add HETEROPLASMY fraction for mitochondrial\n"
+              << "                          variants (from sample FORMAT AF, or derived\n"
+              << "                          from AD when AF is absent)\n"
+              << "  --mitomap FILE          Mitochondrial disease variants (MITOMAP/HmtVar\n"
+              << "                          TSV or VCF); adds MITOMAP_DISEASE and\n"
+              << "                          MITOMAP_STATUS for matching MT variants\n"
+              << "  --sv-fields             Add SV descriptor columns for structural\n"
+              << "                          variants: SV_TYPE, SV_LEN, SV_END, CN, BND_MATE\n"
+              << "  --sv-frequency FILE     Population SV database (gnomAD-SV VCF or DGV-style\n"
+              << "                          TSV/BED); adds SV_AF, SV_MATCH_ID, SV_OVERLAP for\n"
+              << "                          co-located known SVs (see --overlaps/--overlap-cutoff)\n"
+              << "  --acmg-cnv              Classify CNV losses/gains per the ACMG/ClinGen 2020\n"
+              << "                          standard (computable subset: sections 1-4). Adds\n"
+              << "                          ACMG_CLASS, ACMG_SCORE, ACMG_EVIDENCE. Use with\n"
+              << "                          --clingen-dosage and --sv-frequency for best results\n\n"
               << "Distance and Shifting:\n"
               << "  --distance VAL[,VAL]    Upstream[,downstream] distance (default: 5000)\n"
               << "  --shift-3prime          3' shift indels before consequence determination\n"
@@ -164,7 +185,11 @@ void print_usage(const char* program_name) {
               << "  --max-af                Report maximum AF across populations\n"
               << "  --exclude-predicted     Exclude predicted (XM_/XR_) transcripts\n"
               << "  --chr LIST              Only annotate these chromosomes (comma-separated)\n"
-              << "  --overlaps TYPE         SV overlap type: any, within, surrounding, exact\n"
+              << "  --overlaps TYPE         SV overlap mode for --sv-frequency matching:\n"
+              << "                          any, within, surrounding, exact, reciprocal (default)\n"
+              << "  --overlap-cutoff VAL    Minimum reciprocal overlap for an SV frequency\n"
+              << "                          match, as a fraction or percentage (default: 0.7)\n"
+              << "  --max-sv-size N         Skip structural variants longer than N bp\n"
               << "  --include_consequence LIST  Only include these consequences (comma-separated)\n"
               << "  --exclude_consequence LIST  Exclude these consequences (comma-separated)\n\n"
               << "Perl VEP Compatibility:\n"
@@ -316,6 +341,14 @@ void post_process_annotations(std::vector<vep::VariantAnnotation>& annotations,
             if (gc.oe_lof_upper >= 0) {
                 ann.custom_annotations["LOEUF"] = vep::format_constraint_score(gc.oe_lof_upper);
             }
+            // ClinGen dosage sensitivity (haploinsufficiency/triplosensitivity);
+            // primarily meaningful for CNV/SV gene overlaps
+            if (gc.hi_score >= 0) {
+                ann.custom_annotations["HI_SCORE"] = vep::format_constraint_score(gc.hi_score);
+            }
+            if (gc.ts_score >= 0) {
+                ann.custom_annotations["TS_SCORE"] = vep::format_constraint_score(gc.ts_score);
+            }
         }
     }
 }
@@ -390,23 +423,32 @@ enum class InputFormat { VCF, ENSEMBL, HGVS, BED, REGION, UNKNOWN };
 InputFormat detect_input_format(const std::string& line) {
     if (line.empty() || line[0] == '#') return InputFormat::UNKNOWN;
 
-    // A VCF data line is tab-delimited with at least 8 columns (>=7 tabs). Detect it
-    // FIRST: otherwise the whole-line HGVS/Region scans below can be tripped by VCF
-    // sample data -- a genotype "0/1" (has '/'), a FORMAT "GT:SM:CN" (has ':'), and a
-    // DRAGEN CNV id like "DRAGEN:LOSS:chr1:1000-2000" (has ':' and '-') together match
-    // the Region pattern, mis-classifying any multi-sample/DRAGEN VCF as Region.
-    {
-        int tabs = 0;
-        for (char c : line) if (c == '\t') tabs++;
-        if (tabs >= 7) return InputFormat::VCF;
+    // Count tabs once; used by the VCF checks below.
+    int tab_count = 0;
+    for (char c : line) {
+        if (c == '\t') tab_count++;
     }
 
-    // HGVS: contains ':' followed by c./p./g./n./m. notation
-    if (line.find(":c.") != std::string::npos || line.find(":p.") != std::string::npos ||
-        line.find(":g.") != std::string::npos || line.find(":n.") != std::string::npos ||
-        line.find(":m.") != std::string::npos) {
-        return InputFormat::HGVS;
+    // HGVS: the FIRST field contains c./p./g./n./m. notation. Only the first
+    // whitespace-delimited token is scanned — the HGVS input branch trims the
+    // line there too — so an HGVS list may carry extra tab-separated annotation
+    // columns without being mistaken for VCF, while a VCF line whose INFO/CSQ
+    // payload embeds ":c." is not mistaken for HGVS.
+    {
+        std::string first = line.substr(0, line.find_first_of(" \t"));
+        if (first.find(":c.") != std::string::npos || first.find(":p.") != std::string::npos ||
+            first.find(":g.") != std::string::npos || first.find(":n.") != std::string::npos ||
+            first.find(":m.") != std::string::npos) {
+            return InputFormat::HGVS;
+        }
     }
+
+    // A VCF data line is tab-delimited with at least 8 columns (>=7 tabs). Detect it
+    // BEFORE the Region scan: otherwise VCF sample data -- a genotype "0/1" (has
+    // '/'), a FORMAT "GT:SM:CN" (has ':'), and a DRAGEN CNV id like
+    // "DRAGEN:LOSS:chr1:1000-2000" (has ':' and '-') -- together match the Region
+    // pattern, mis-classifying any multi-sample/DRAGEN VCF as Region.
+    if (tab_count >= 7) return InputFormat::VCF;
 
     // Region format: CHR:START-END/ALLELE or CHR:START-END:STRAND/ALLELE
     if (line.find('/') != std::string::npos && line.find(':') != std::string::npos &&
@@ -417,12 +459,6 @@ InputFormat detect_input_format(const std::string& line) {
         if (dash != std::string::npos) {
             return InputFormat::REGION;
         }
-    }
-
-    // Count tabs to distinguish VCF from Ensembl format
-    int tab_count = 0;
-    for (char c : line) {
-        if (c == '\t') tab_count++;
     }
 
     // VCF: at least 4 tabs (CHROM\tPOS\tID\tREF\tALT)
@@ -834,6 +870,17 @@ int main(int argc, char* argv[]) {
     std::string constraint_path;
     std::string pli_path;
     std::string loeuf_path;
+    std::string clingen_dosage_path;     // --clingen-dosage (HI/TS curations)
+
+    // Structural variant options
+    std::string sv_frequency_path;                          // --sv-frequency
+    double sv_overlap_cutoff = 0.7;                         // --overlap-cutoff
+    vep::OverlapType sv_overlap_mode = vep::OverlapType::RECIPROCAL;  // --overlaps
+    long max_sv_size = 0;                                   // --max-sv-size (0 = unlimited)
+    bool acmg_cnv_mode = false;                             // --acmg-cnv
+
+    // Mitochondrial disease database
+    std::string mitomap_path;                               // --mitomap
 
     // Plugins
     std::vector<std::pair<std::string, std::string> > plugins;
@@ -884,6 +931,8 @@ int main(int argc, char* argv[]) {
     int upstream_distance = 5000;
     int downstream_distance = 5000;
     bool show_variant_class = false;
+    bool show_heteroplasmy = false;      // --heteroplasmy (MT allele fraction)
+    bool show_sv_fields = false;         // --sv-fields (SV_TYPE/SV_LEN/SV_END/CN/BND_MATE)
 
     // Phase B: new CLI flags
     bool shift_3prime = false;
@@ -1257,6 +1306,8 @@ int main(int argc, char* argv[]) {
             pli_path = argv[++i];
         } else if (arg == "--loeuf" && i + 1 < argc) {
             loeuf_path = argv[++i];
+        } else if (arg == "--clingen-dosage" && i + 1 < argc) {
+            clingen_dosage_path = argv[++i];
         }
         // Plugins
         else if (arg == "--plugin" && i + 1 < argc) {
@@ -1376,7 +1427,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--max-af") {
             show_max_af = true;
         } else if (arg == "--overlaps" && i + 1 < argc) {
-            ++i; // Consume argument (reserved for future SV overlap mode)
+            sv_overlap_mode = vep::parse_overlap_type(argv[++i]);
         }
         // Performance options
         else if (arg == "--buffer-size" && i + 1 < argc) {
@@ -1406,6 +1457,21 @@ int main(int argc, char* argv[]) {
         // Variant class (Phase A4)
         else if (arg == "--variant-class") {
             show_variant_class = true;
+        }
+        else if (arg == "--heteroplasmy") {
+            show_heteroplasmy = true;
+        }
+        else if (arg == "--sv-fields") {
+            show_sv_fields = true;
+        }
+        else if (arg == "--sv-frequency" && i + 1 < argc) {
+            sv_frequency_path = argv[++i];
+        }
+        else if (arg == "--acmg-cnv") {
+            acmg_cnv_mode = true;
+        }
+        else if (arg == "--mitomap" && i + 1 < argc) {
+            mitomap_path = argv[++i];
         }
         // Shift options (Phase B1)
         else if (arg == "--shift-3prime") {
@@ -1678,7 +1744,11 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--custom-multi-allelic") {
             // No-op: handle multi-allelic custom annotations
         } else if (arg == "--max-sv-size" && i + 1 < argc) {
-            ++i; // No-op: max structural variant size
+            try {
+                max_sv_size = std::stol(argv[++i]);
+            } catch (const std::exception&) {
+                std::cerr << "Warning: invalid --max-sv-size value, ignoring\n";
+            }
         } else if (arg == "--no-check-variants-order") {
             // No-op: skip variant order check
         } else if (arg == "--individual-zyg") {
@@ -1726,7 +1796,13 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--stats-html") {
             // No-op: HTML stats file (default behavior)
         } else if (arg == "--overlap-cutoff" && i + 1 < argc) {
-            ++i; // No-op: minimum overlap percentage for --custom
+            try {
+                sv_overlap_cutoff = std::stod(argv[++i]);
+                // Accept a percentage (e.g. 70) or a fraction (0.7)
+                if (sv_overlap_cutoff > 1.0) sv_overlap_cutoff /= 100.0;
+            } catch (const std::exception&) {
+                std::cerr << "Warning: invalid --overlap-cutoff value, using default\n";
+            }
         } else if (arg == "--pass" && i + 1 < argc) {
             ++i; // No-op: alias for --password
         }
@@ -1797,6 +1873,35 @@ int main(int argc, char* argv[]) {
     if (!loeuf_path.empty()) {
         if (!constraint_db.load_loeuf_scores(loeuf_path)) {
             std::cerr << "Warning: Failed to load LOEUF file: " << loeuf_path << std::endl;
+        }
+    }
+    if (!clingen_dosage_path.empty()) {
+        if (!constraint_db.load_clingen_dosage(clingen_dosage_path)) {
+            std::cerr << "Warning: Failed to load ClinGen dosage file: " << clingen_dosage_path << std::endl;
+        } else {
+            vep::log(vep::LogLevel::INFO, "Loaded ClinGen dosage curations from " + clingen_dosage_path);
+        }
+    }
+
+    // Load population SV frequency database if specified
+    vep::SVFrequencyDB sv_freq_db;
+    if (!sv_frequency_path.empty()) {
+        if (!sv_freq_db.load(sv_frequency_path)) {
+            std::cerr << "Warning: Failed to load SV frequency file: " << sv_frequency_path << std::endl;
+        } else {
+            vep::log(vep::LogLevel::INFO, "Loaded " + std::to_string(sv_freq_db.size()) +
+                     " population SVs from " + sv_frequency_path);
+        }
+    }
+
+    // Load mitochondrial disease database if specified
+    vep::MitoDiseaseDB mito_db;
+    if (!mitomap_path.empty()) {
+        if (!mito_db.load(mitomap_path)) {
+            std::cerr << "Warning: Failed to load mito disease file: " << mitomap_path << std::endl;
+        } else {
+            vep::log(vep::LogLevel::INFO, "Loaded " + std::to_string(mito_db.size()) +
+                     " mitochondrial disease variants from " + mitomap_path);
         }
     }
 
@@ -2055,6 +2160,14 @@ int main(int argc, char* argv[]) {
         }
         if (show_variant_class) custom_columns.push_back("VARIANT_CLASS");
         if (show_allele_number) custom_columns.push_back("ALLELE_NUM");
+        if (show_heteroplasmy) custom_columns.push_back("HETEROPLASMY");
+        if (show_sv_fields) {
+            custom_columns.push_back("SV_TYPE");
+            custom_columns.push_back("SV_LEN");
+            custom_columns.push_back("SV_END");
+            custom_columns.push_back("CN");
+            custom_columns.push_back("BND_MATE");
+        }
         if (show_canonical) custom_columns.push_back("CANONICAL");
         if (show_mane) {
             custom_columns.push_back("MANE_SELECT");
@@ -2104,6 +2217,24 @@ int main(int argc, char* argv[]) {
         if (vep::get_gene_constraint_db().is_loaded()) {
             custom_columns.push_back("pLI");
             custom_columns.push_back("LOEUF");
+        }
+        if (vep::get_gene_constraint_db().has_dosage_data()) {
+            custom_columns.push_back("HI_SCORE");
+            custom_columns.push_back("TS_SCORE");
+        }
+        if (sv_freq_db.is_loaded()) {
+            custom_columns.push_back("SV_AF");
+            custom_columns.push_back("SV_MATCH_ID");
+            custom_columns.push_back("SV_OVERLAP");
+        }
+        if (acmg_cnv_mode) {
+            custom_columns.push_back("ACMG_CLASS");
+            custom_columns.push_back("ACMG_SCORE");
+            custom_columns.push_back("ACMG_EVIDENCE");
+        }
+        if (mito_db.is_loaded()) {
+            custom_columns.push_back("MITOMAP_DISEASE");
+            custom_columns.push_back("MITOMAP_STATUS");
         }
     };
 
@@ -2705,18 +2836,23 @@ int main(int argc, char* argv[]) {
                     // Skip empty alleles (malformed VCF)
                     if (single_alt.empty()) continue;
 
-                    // Skip gVCF non-variant placeholder alleles (reference blocks):
+                    // gVCF non-variant placeholder alleles (reference blocks):
                     // <NON_REF> (GATK/DRAGEN) and <*>. These are not real variants and
                     // would otherwise be annotated spuriously; at WGS gVCF scale there
-                    // can be millions of them.
-                    if (single_alt == "<NON_REF>" || single_alt == "<*>") continue;
+                    // can be millions of them. Honors --allow-non-variant like the
+                    // other non-variant spellings below.
+                    if (!allow_non_variant &&
+                        (single_alt == "<NON_REF>" || single_alt == "<*>")) {
+                        continue;
+                    }
 
                     // Skip non-variant alleles unless allowed
                     if (!allow_non_variant && (single_alt == ref || single_alt == "." || single_alt == "*")) {
                         continue;
                     }
-                    // Even when allowed, treat "." and "*" specially
-                    if (single_alt == "." || single_alt == "*") {
+                    // Even when allowed, treat non-variant spellings specially
+                    if (single_alt == "." || single_alt == "*" ||
+                        single_alt == "<NON_REF>" || single_alt == "<*>") {
                         single_alt = ref;  // Treat as reference for annotation
                     }
 
@@ -2753,8 +2889,22 @@ int main(int argc, char* argv[]) {
 
                     if (is_symbolic || is_bnd) {
                         // Route to structural variant pipeline. Pass FORMAT+sample
-                        // columns so DRAGEN CNV copy number (FORMAT CN) is available.
-                        auto sv = vep::parse_sv_from_vcf(chrom, pos, ref, single_alt, info_map, sample_columns);
+                        // columns so DRAGEN CNV copy number (FORMAT CN) is available,
+                        // plus the alt-allele count so a record-level CN is not
+                        // attributed to alleles it cannot describe.
+                        int num_alts = 1 + static_cast<int>(std::count(alt.begin(), alt.end(), ','));
+                        auto sv = vep::parse_sv_from_vcf(chrom, pos, ref, single_alt, info_map,
+                                                         sample_columns, num_alts);
+
+                        // --max-sv-size: skip SVs larger than the limit
+                        if (max_sv_size > 0 && sv.is_sv() && sv.length() > max_sv_size) {
+                            if (!quiet_mode) {
+                                std::cerr << "Warning: skipping SV of length " << sv.length()
+                                          << " at " << chrom << ":" << pos
+                                          << " (exceeds --max-sv-size " << max_sv_size << ")\n";
+                            }
+                            continue;
+                        }
 
                         // Get ALL overlapping transcripts for the full SV region
                         annotations.clear();
@@ -2798,6 +2948,45 @@ int main(int argc, char* argv[]) {
                                     }
                                 }
                                 annotations.push_back(std::move(ann));
+                            }
+                        }
+
+                        // Attach SV descriptor columns (--sv-fields)
+                        if (show_sv_fields) {
+                            for (auto& a : annotations) {
+                                vep::add_sv_output_fields(sv, a.custom_annotations);
+                            }
+                        }
+
+                        // Attach the co-located population SV (--sv-frequency)
+                        vep::SVFrequencyDB::Match sv_freq_match;
+                        bool sv_freq_found = sv_freq_db.is_loaded() &&
+                            sv_freq_db.best_match(sv, sv_freq_match, sv_overlap_cutoff, sv_overlap_mode);
+                        if (sv_freq_found) {
+                            char af_buf[32], ov_buf[16];
+                            std::snprintf(af_buf, sizeof(af_buf), "%.6g", sv_freq_match.record.af);
+                            std::snprintf(ov_buf, sizeof(ov_buf), "%.3f", sv_freq_match.overlap);
+                            for (auto& a : annotations) {
+                                if (sv_freq_match.record.af >= 0) a.custom_annotations["SV_AF"] = af_buf;
+                                if (!sv_freq_match.record.id.empty()) a.custom_annotations["SV_MATCH_ID"] = sv_freq_match.record.id;
+                                a.custom_annotations["SV_OVERLAP"] = ov_buf;
+                            }
+                        }
+
+                        // ACMG/ClinGen CNV classification (--acmg-cnv)
+                        if (acmg_cnv_mode) {
+                            auto acmg = vep::classify_acmg_cnv(
+                                sv, sv_transcripts, vep::get_gene_constraint_db(),
+                                sv_freq_found ? sv_freq_match.record.af : -1.0);
+                            if (acmg.applicable) {
+                                char score_buf[16];
+                                std::snprintf(score_buf, sizeof(score_buf), "%.2f", acmg.score);
+                                std::string ev = vep::format_acmg_evidence(acmg.evidence);
+                                for (auto& a : annotations) {
+                                    a.custom_annotations["ACMG_CLASS"] = acmg.classification;
+                                    a.custom_annotations["ACMG_SCORE"] = score_buf;
+                                    a.custom_annotations["ACMG_EVIDENCE"] = ev;
+                                }
                             }
                         }
                     } else {
@@ -2874,8 +3063,32 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
+                    // Heteroplasmy fraction for mitochondrial variants (per alt
+                    // allele, from the first sample's FORMAT AF or AD)
+                    std::string heteroplasmy;
+                    const vep::MitoDiseaseDB::Entry* mito_entry = nullptr;
+                    if (vep::is_mito_chrom(chrom)) {
+                        if (show_heteroplasmy) {
+                            heteroplasmy = vep::compute_heteroplasmy(sample_columns, allele_num);
+                        }
+                        if (mito_db.is_loaded()) {
+                            mito_entry = mito_db.lookup(pos, ref, single_alt);
+                        }
+                    }
+
                     // Add variant class, allele number, VCF passthrough fields to annotations
                     for (auto& a : annotations) {
+                        if (!heteroplasmy.empty()) {
+                            a.custom_annotations["HETEROPLASMY"] = heteroplasmy;
+                        }
+                        if (mito_entry) {
+                            if (!mito_entry->disease.empty()) {
+                                a.custom_annotations["MITOMAP_DISEASE"] = mito_entry->disease;
+                            }
+                            if (!mito_entry->status.empty()) {
+                                a.custom_annotations["MITOMAP_STATUS"] = mito_entry->status;
+                            }
+                        }
                         if (show_variant_class) {
                             if (minimal_mode && (ann_ref != ref || ann_alt != single_alt)) {
                                 // Use minimized alleles for variant class
@@ -3346,6 +3559,45 @@ int main(int argc, char* argv[]) {
                         annotations.push_back(std::move(ann));
                     }
                 }
+
+                // Attach SV descriptor columns (--sv-fields)
+                if (show_sv_fields) {
+                    for (auto& a : annotations) {
+                        vep::add_sv_output_fields(sv, a.custom_annotations);
+                    }
+                }
+
+                // Attach the co-located population SV (--sv-frequency)
+                vep::SVFrequencyDB::Match sv_freq_match;
+                bool sv_freq_found = sv_freq_db.is_loaded() &&
+                    sv_freq_db.best_match(sv, sv_freq_match, sv_overlap_cutoff, sv_overlap_mode);
+                if (sv_freq_found) {
+                    char af_buf[32], ov_buf[16];
+                    std::snprintf(af_buf, sizeof(af_buf), "%.6g", sv_freq_match.record.af);
+                    std::snprintf(ov_buf, sizeof(ov_buf), "%.3f", sv_freq_match.overlap);
+                    for (auto& a : annotations) {
+                        if (sv_freq_match.record.af >= 0) a.custom_annotations["SV_AF"] = af_buf;
+                        if (!sv_freq_match.record.id.empty()) a.custom_annotations["SV_MATCH_ID"] = sv_freq_match.record.id;
+                        a.custom_annotations["SV_OVERLAP"] = ov_buf;
+                    }
+                }
+
+                // ACMG/ClinGen CNV classification (--acmg-cnv)
+                if (acmg_cnv_mode) {
+                    auto acmg = vep::classify_acmg_cnv(
+                        sv, sv_transcripts, vep::get_gene_constraint_db(),
+                        sv_freq_found ? sv_freq_match.record.af : -1.0);
+                    if (acmg.applicable) {
+                        char score_buf[16];
+                        std::snprintf(score_buf, sizeof(score_buf), "%.2f", acmg.score);
+                        std::string ev = vep::format_acmg_evidence(acmg.evidence);
+                        for (auto& a : annotations) {
+                            a.custom_annotations["ACMG_CLASS"] = acmg.classification;
+                            a.custom_annotations["ACMG_SCORE"] = score_buf;
+                            a.custom_annotations["ACMG_EVIDENCE"] = ev;
+                        }
+                    }
+                }
             } else if (all_transcripts || filter_config.requires_all_transcripts()) {
                 // Any transcript-selecting/filtering flag (--coding-only, --biotype,
                 // --canonical-only, --mane-only, --no-intergenic, include/exclude
@@ -3362,6 +3614,16 @@ int main(int argc, char* argv[]) {
             if (was_minimised) {
                 for (auto& a : annotations) {
                     a.custom_annotations["MINIMISED"] = "1";
+                }
+            }
+
+            // Mito disease annotations (--mitomap)
+            if (mito_db.is_loaded() && vep::is_mito_chrom(chrom)) {
+                if (const auto* e = mito_db.lookup(pos, ref, alt)) {
+                    for (auto& a : annotations) {
+                        if (!e->disease.empty()) a.custom_annotations["MITOMAP_DISEASE"] = e->disease;
+                        if (!e->status.empty()) a.custom_annotations["MITOMAP_STATUS"] = e->status;
+                    }
                 }
             }
 

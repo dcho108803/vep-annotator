@@ -4,7 +4,7 @@ A high-performance C++ implementation of Ensembl's [Variant Effect Predictor (VE
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![Tests](https://img.shields.io/badge/tests-1209%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1268%20passing-brightgreen.svg)]()
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ git clone https://github.com/dcho108803/vep-annotator.git
 cd vep-annotator && mkdir build && cd build
 cmake .. && make -j4
 
-# Run tests (1209 tests)
+# Run tests (1268 tests)
 ./vep_tests
 
 # Annotate a single variant
@@ -57,6 +57,10 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 
 **Core annotation** — All 39 SO consequence types with impact classification, HGVS notation (HGVSc/HGVSp/HGVSg), CDS/protein position calculation, codon changes, 3' shifting, and structural variant annotation (DEL, DUP, INS, INV, CNV, BND).
 
+**CNV interpretation** — SV descriptor columns (`--sv-fields`), ClinGen haploinsufficiency/triplosensitivity scores (`--clingen-dosage`), population SV frequency matching against gnomAD-SV/DGV with configurable reciprocal overlap (`--sv-frequency`, `--overlaps`, `--overlap-cutoff`), and ACMG/ClinGen 2020 CNV classification with an evidence trail (`--acmg-cnv`). DRAGEN `SVTYPE=CNV` records with known copy number are annotated with full DEL/DUP consequence parity (splice terms, truncation/elongation, non-coding ablation), including fractional mosaic copy numbers and GT-directed copy-number attribution in multi-sample VCFs.
+
+**Mitochondrial annotation** — chrM/MT contig naming unified across VCF/GTF/FASTA conventions, `m.` HGVS output on NC_012920.1, the vertebrate mitochondrial genetic code (translation table 2) for MT coding consequences, Mt_tRNA/Mt_rRNA biotype handling, heteroplasmy fractions from sample FORMAT AF/AD (`--heteroplasmy`), and MITOMAP/HmtVar disease variant lookup (`--mitomap`).
+
 **Transcript selection** — `--pick`, `--per_gene`, `--pick_allele`, `--flag_pick`, `--most_severe` with MANE Select/Plus Clinical, canonical, TSL, APPRIS, and CCDS ranking.
 
 **Output formats** — TSV (default), JSON (Perl VEP-compatible schema), and VCF (CSQ INFO field). Use `--everything` for comprehensive output.
@@ -81,6 +85,9 @@ sudo apt-get install cmake libhts-dev zlib1g-dev
 | Custom VCF | `--annotation NAME:FILE[:FIELDS]` | In-memory VCF annotation |
 | Custom VCF (tabix) | `--annotation-tabix NAME:FILE[:FIELDS]` | On-disk tabix VCF queries |
 | Custom (Perl-compat) | `--custom FILE,NAME,TYPE,...` | VCF, BED, bigWig, GFF/GTF |
+| ClinGen dosage | `--clingen-dosage FILE` | Haploinsufficiency/triplosensitivity curations (HI_SCORE, TS_SCORE) |
+| SV frequency | `--sv-frequency FILE` | Population SVs, gnomAD-SV VCF or DGV-style TSV/BED (SV_AF, SV_MATCH_ID, SV_OVERLAP) |
+| MITOMAP | `--mitomap FILE` | Mitochondrial disease variants, TSV or VCF (MITOMAP_DISEASE, MITOMAP_STATUS) |
 
 **Plugin system** — Extend with custom C++ annotation sources via shared libraries (`dlopen`).
 
@@ -172,23 +179,25 @@ Use `--annotation-tabix` instead of `--annotation` for large VCF files to minimi
 
 ## Testing
 
-1209 GoogleTest unit tests across 12 test suites:
+1268 GoogleTest unit tests across 14 test suites:
 
 | Test Suite | Tests | Coverage |
 |------------|------:|----------|
-| Filter VEP | 206 | Operators, expressions, conditions, pipeline, edge cases |
-| Output Writers | 197 | TSV/JSON/VCF formatting, escaping, stats, position formatting |
-| CLI Utilities | 160 | Variant parsing, allele trimming, config parsing/loading/merge, format detection |
+| Output Writers | 217 | TSV/JSON/VCF formatting, escaping, stats, position formatting |
+| Filter VEP | 208 | Operators, expressions, conditions, pipeline, edge cases |
+| CLI Utilities | 199 | Variant parsing, allele trimming, config parsing/loading/merge, format detection |
+| HGVS | 132 | Parsing, HGVSg generation, SPDI, RefSeq mapping, edge cases |
 | Transcript Filter | 121 | Pick modes, filtering, ranking, APPRIS/TSL, complex scenarios |
-| HGVS | 90 | Parsing, HGVSg generation, SPDI, RefSeq mapping, edge cases |
+| Structural Variants | 88 | SV types, BND parsing, consequences, CNV/DEL/DUP parity, copy-number attribution, SV output fields |
 | Consequences | 84 | SO terms, impact levels, ranking, variant class, display terms |
-| Structural Variants | 60 | SV types, BND parsing, consequences, overlap, properties |
 | Annotation Sources | 80 | LOFTEE, NMD, MaxEntScan, dbNSFP, source manager, domains |
 | Codon Table | 35 | Translation, MT codons, completeness, case handling, edge cases |
+| Review Fixes (2026-05-29) | 31 | Minus-strand CDS/UTR boundary, HGVSg delins, filter all-transcripts, gene-constraint, SV strand/BND, HGVS inv/delins/ext, exon-intron strand |
 | Exon/Intron Numbers | 25 | Position calculation, formatting |
+| CNV Annotation | 21 | ClinGen dosage loading, SV frequency matching, ACMG CNV classification |
+| Mitochondrial | 15 | chrM/MT naming interop, Mt_tRNA/Mt_rRNA biotypes, mito genetic code dispatch, heteroplasmy, MITOMAP lookup |
 | SpliceAI | 12 | Score parsing, cutoffs, thread safety |
-| Review Fixes (2026-05-29) | 35 | Minus-strand CDS/UTR boundary, HGVSg delins, filter all-transcripts, gene-constraint, SV strand/BND, HGVS inv/delins/ext, exon-intron strand |
-| **Total** | **1209** | |
+| **Total** | **1268** | |
 
 ```bash
 cd build && ./vep_tests
@@ -249,6 +258,31 @@ cd build && ./vep_tests
 | `--flag_pick` | Flag picked annotation but output all |
 | `--pick_order LIST` | Custom pick priority order |
 | `--most_severe` | Only report most severe consequence |
+
+</details>
+
+<details>
+<summary><strong>Structural Variants & CNV</strong></summary>
+
+| Option | Description |
+|--------|-------------|
+| `--sv-fields` | Add SV_TYPE, SV_LEN, SV_END, CN, BND_MATE columns |
+| `--sv-frequency FILE` | Population SV database (gnomAD-SV VCF or DGV-style TSV/BED); adds SV_AF, SV_MATCH_ID, SV_OVERLAP |
+| `--overlaps TYPE` | SV frequency match mode: `any`, `within`, `surrounding`, `exact`, `reciprocal` (default) |
+| `--overlap-cutoff VAL` | Minimum reciprocal overlap, fraction or percent (default: 0.7) |
+| `--max-sv-size N` | Skip structural variants longer than N bp |
+| `--clingen-dosage FILE` | ClinGen gene dosage curations; adds HI_SCORE, TS_SCORE |
+| `--acmg-cnv` | ACMG/ClinGen 2020 CNV classification (computable subset, sections 1-4); adds ACMG_CLASS, ACMG_SCORE, ACMG_EVIDENCE |
+
+</details>
+
+<details>
+<summary><strong>Mitochondrial</strong></summary>
+
+| Option | Description |
+|--------|-------------|
+| `--heteroplasmy` | Add HETEROPLASMY fraction for MT variants (FORMAT AF, or derived from AD) |
+| `--mitomap FILE` | MITOMAP/HmtVar disease variants; adds MITOMAP_DISEASE, MITOMAP_STATUS |
 
 </details>
 

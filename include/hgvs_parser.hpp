@@ -827,7 +827,13 @@ inline std::string generate_hgvsg(const std::string& chrom, int pos,
     // Get RefSeq accession via shared helper
     std::string refseq = chrom_to_refseq_lookup(chrom);
 
-    result = refseq + ":g.";
+    // Mitochondrial variants use the m. coordinate type (HGVS), not g.
+    std::string norm_chrom = chrom;
+    if (norm_chrom.size() > 3 && norm_chrom.substr(0, 3) == "chr") {
+        norm_chrom = norm_chrom.substr(3);
+    }
+    const bool is_mito = (norm_chrom == "MT" || norm_chrom == "M" || norm_chrom == "m");
+    result = refseq + (is_mito ? ":m." : ":g.");
 
     if (ref.size() == 1 && alt.size() == 1) {
         // Substitution

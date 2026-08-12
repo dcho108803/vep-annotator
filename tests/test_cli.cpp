@@ -60,21 +60,30 @@ enum class InputFormat { VCF, ENSEMBL, HGVS, BED, REGION, UNKNOWN };
 static InputFormat detect_input_format(const std::string& line) {
     if (line.empty() || line[0] == '#') return InputFormat::UNKNOWN;
 
-    // A VCF data line is tab-delimited with at least 8 columns (>=7 tabs). Detect it
-    // FIRST so VCF sample data (genotype "0/1", FORMAT "GT:SM:CN", DRAGEN ids like
-    // "DRAGEN:LOSS:chr1:1000-2000") can't be mistaken for HGVS/Region.
-    {
-        int tabs = 0;
-        for (char c : line) if (c == '\t') tabs++;
-        if (tabs >= 7) return InputFormat::VCF;
+    // Count tabs once; used by the VCF checks below.
+    int tab_count = 0;
+    for (char c : line) {
+        if (c == '\t') tab_count++;
     }
 
-    // HGVS: contains ':' followed by c./p./g./n./m. notation
-    if (line.find(":c.") != std::string::npos || line.find(":p.") != std::string::npos ||
-        line.find(":g.") != std::string::npos || line.find(":n.") != std::string::npos ||
-        line.find(":m.") != std::string::npos) {
-        return InputFormat::HGVS;
+    // HGVS: the FIRST field contains c./p./g./n./m. notation. Only the first
+    // whitespace-delimited token is scanned — the HGVS input branch trims the
+    // line there too — so an HGVS list may carry extra tab-separated annotation
+    // columns without being mistaken for VCF, while a VCF line whose INFO/CSQ
+    // payload embeds ":c." is not mistaken for HGVS.
+    {
+        std::string first = line.substr(0, line.find_first_of(" \t"));
+        if (first.find(":c.") != std::string::npos || first.find(":p.") != std::string::npos ||
+            first.find(":g.") != std::string::npos || first.find(":n.") != std::string::npos ||
+            first.find(":m.") != std::string::npos) {
+            return InputFormat::HGVS;
+        }
     }
+
+    // A VCF data line is tab-delimited with at least 8 columns (>=7 tabs). Detect it
+    // BEFORE the Region scan so VCF sample data (genotype "0/1", FORMAT "GT:SM:CN",
+    // DRAGEN ids like "DRAGEN:LOSS:chr1:1000-2000") can't be mistaken for Region.
+    if (tab_count >= 7) return InputFormat::VCF;
 
     // Region format: CHR:START-END/ALLELE or CHR:START-END:STRAND/ALLELE
     if (line.find('/') != std::string::npos && line.find(':') != std::string::npos &&
@@ -84,12 +93,6 @@ static InputFormat detect_input_format(const std::string& line) {
         if (dash != std::string::npos) {
             return InputFormat::REGION;
         }
-    }
-
-    // Count tabs to distinguish VCF from Ensembl format
-    int tab_count = 0;
-    for (char c : line) {
-        if (c == '\t') tab_count++;
     }
 
     // VCF: at least 4 tabs (CHROM\tPOS\tID\tREF\tALT)
@@ -498,6 +501,23 @@ TEST(DetectInputFormat, DragenCnvVcfNotRegion) {
 
 TEST(DetectInputFormat, VCFMinimalFields) {
     EXPECT_EQ(detect_input_format("7\t140753336\trs121913529\tA\tT"), InputFormat::VCF);
+}
+
+TEST(DetectInputFormat, HgvsWithExtraTabColumns) {
+    // An HGVS list exported with 7+ extra tab-separated annotation columns must
+    // stay HGVS: the notation is in the first field, which is all the HGVS
+    // input branch parses (it trims at the first whitespace).
+    EXPECT_EQ(detect_input_format(
+        "NM_000546.6:c.215C>G\tsampleA\tcomment\tcol4\tcol5\tcol6\tcol7\tcol8"),
+        InputFormat::HGVS);
+}
+
+TEST(DetectInputFormat, VcfWithEmbeddedHgvsInInfo) {
+    // A VCF line whose INFO/CSQ payload embeds ":c." notation is still VCF:
+    // only the first field is scanned for HGVS markers.
+    EXPECT_EQ(detect_input_format(
+        "1\t100\trs1\tA\tG\t50\tPASS\tCSQ=G|missense|NM_000546.6:c.215C>G\tGT\t0/1"),
+        InputFormat::VCF);
 }
 
 TEST(DetectInputFormat, VCFWithManyFields) {
@@ -1693,6 +1713,15 @@ TEST(NormalizeChrom, UppercaseCHRPrefix) {
 
 TEST(NormalizeChrom, MTNoChange) {
     EXPECT_EQ(vep::normalize_chrom("MT"), "MT");
+}
+
+TEST(NormalizeChrom, MitoNamingUnified) {
+    // UCSC chrM, bare M, and chrMT all normalize to the canonical MT so a
+    // chrM-named VCF matches an MT-named GTF/FASTA and vice versa
+    EXPECT_EQ(vep::normalize_chrom("chrM"), "MT");
+    EXPECT_EQ(vep::normalize_chrom("M"), "MT");
+    EXPECT_EQ(vep::normalize_chrom("chrMT"), "MT");
+    EXPECT_EQ(vep::normalize_chrom("m"), "MT");
 }
 
 // ============================================================================

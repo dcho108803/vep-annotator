@@ -741,8 +741,22 @@ TEST(HGVSgChrPrefix, ChromosomeXY) {
 }
 
 TEST(HGVSgChrPrefix, MitochondrialChrM) {
+    // MT variants use the m. coordinate type per HGVS
     std::string mt_result = generate_hgvsg("MT", 100, "A", "G");
-    EXPECT_EQ(mt_result, "NC_012920.1:g.100A>G");
+    EXPECT_EQ(mt_result, "NC_012920.1:m.100A>G");
+}
+
+TEST(HGVSgChrPrefix, MitochondrialUCSCNaming) {
+    // chrM (UCSC) and MT (Ensembl) must produce identical m. notation
+    EXPECT_EQ(generate_hgvsg("chrM", 8860, "A", "G"), "NC_012920.1:m.8860A>G");
+    EXPECT_EQ(generate_hgvsg("chrMT", 8860, "A", "G"), "NC_012920.1:m.8860A>G");
+    EXPECT_EQ(generate_hgvsg("M", 8860, "A", "G"), "NC_012920.1:m.8860A>G");
+}
+
+TEST(HGVSgChrPrefix, MitochondrialDeletion) {
+    // Non-substitution MT variants also carry the m. prefix
+    std::string result = generate_hgvsg("MT", 100, "AT", "A");
+    EXPECT_EQ(result, "NC_012920.1:m.101del");
 }
 
 
@@ -797,7 +811,7 @@ TEST(HGVSgFormatParity, SNVChrX) {
 
 TEST(HGVSgFormatParity, SNVChrMT) {
     std::string result = generate_hgvsg("MT", 7000, "T", "C");
-    EXPECT_EQ(result, "NC_012920.1:g.7000T>C");
+    EXPECT_EQ(result, "NC_012920.1:m.7000T>C");
 }
 
 TEST(HGVSgFormatParity, DeletionWithVCFAnchor) {

@@ -2,6 +2,78 @@
 
 All notable changes to the VEP Annotator project are documented here.
 
+## [1.8.0] - 2026-08-11
+
+CNV interpretation and mitochondrial annotation, plus fixes for all 15 findings
+of the 2026-08-11 deep review of the 1.7.0 WGS/DRAGEN commit.
+
+### Added — CNV interpretation
+- **SV output columns** (`--sv-fields`): `SV_TYPE`, `SV_LEN`, `SV_END`, `CN`
+  (integral or fractional), and `BND_MATE` — previously the parsed SV descriptors
+  were discarded after consequence calling.
+- **ClinGen dosage scores** (`--clingen-dosage FILE`): loads the ClinGen Gene
+  Curation Results TSV (or simple `GENE\tHI\tTS`), emitting `HI_SCORE` /
+  `TS_SCORE` per overlapped gene. The previously dead `hi_score`/`ts_score`
+  fields in `gene_constraint.hpp` are now wired to output.
+- **Population SV frequency** (`--sv-frequency FILE`): matches input SVs against
+  gnomAD-SV style VCFs or DGV-style TSV/BED by SV class and overlap, emitting
+  `SV_AF`, `SV_MATCH_ID`, `SV_OVERLAP`. Activates the previously no-op
+  `--overlaps` (any/within/surrounding/exact/reciprocal), `--overlap-cutoff`
+  (default 0.7 reciprocal), and `--max-sv-size` flags.
+- **ACMG CNV classification** (`--acmg-cnv`): the computable subset of the
+  ACMG/ClinGen 2020 standard (sections 1-4: gene content, dosage sensitivity,
+  gene count, population frequency), emitting `ACMG_CLASS`, `ACMG_SCORE`, and an
+  `ACMG_EVIDENCE` trail (e.g. `1A(+0.00)&2A:BRCA1(+1.00)&4O(-1.00)`).
+
+### Added — mitochondrial annotation
+- **chrM/MT naming unified**: `normalize_chrom` maps chrM/M/chrMT to the
+  canonical `MT` across VCF, GTF, FASTA, and tabix paths — a UCSC-named VCF
+  against an Ensembl GTF previously annotated **zero** MT variants. All
+  hand-rolled `chr`-prefix strips in `vep_annotator.cpp` now route through the
+  shared helper.
+- **`m.` HGVS output**: MT variants emit `NC_012920.1:m.…` instead of `:g.…`.
+- **Heteroplasmy** (`--heteroplasmy`): per-allele MT allele fraction from sample
+  FORMAT `AF` (passthrough) or derived from `AD`, emitted as `HETEROPLASMY`.
+- **Mito disease lookup** (`--mitomap FILE`): MITOMAP/HmtVar style TSV (incl.
+  combined-allele spellings `A3243G` / `m.3243A>G`) or VCF, emitting
+  `MITOMAP_DISEASE` / `MITOMAP_STATUS` for matching MT variants.
+- **Mt_tRNA/Mt_rRNA coverage**: end-to-end tests lock in
+  `non_coding_transcript_exon_variant` + biotype for MT tRNA/rRNA genes and the
+  chromosome-dispatched mito genetic code (TGA→Trp never `stop_gained` on MT).
+
+### Fixed (2026-08-11 review, 15/15 findings)
+- **Format detection**: the 1.7.0 ≥7-tab VCF short-circuit misrouted HGVS input
+  carrying extra tab-separated columns to VCF (whole-file data loss). HGVS
+  markers are now scanned in the first field only, before the tab check; tabs
+  are counted once.
+- **gVCF reference blocks vs `--allow-non-variant`**: the unconditional
+  `<NON_REF>`/`<*>` skip ran before the flag gate, so reference blocks could
+  never be annotated; they now honor the flag and are treated as reference like
+  `.`/`*`.
+- **Multi-sample copy number**: FORMAT `CN` was read from the first sample only;
+  it is now GT-directed (the sample carrying the alt allele owns the CN), with a
+  unanimous-value fallback and no guess on conflict. A record-level CN is no
+  longer applied to the alleles of a multi-allelic record it cannot describe.
+- **CNV/DEL/DUP consequence parity**: a CNV with known copy number now resolves
+  to DEL/DUP semantics up front — whole-transcript losses of any biotype get
+  `transcript_ablation` (early-return, no more leaked UTR terms), partial losses
+  get splice terms and `feature_truncation` (UTR-only overlaps included), and
+  partial gains get `feature_elongation`, all matching the equivalent DEL/DUP
+  spelling. The duplicated CN==1 branch was removed.
+- **Fractional copy number**: `CN=2.8` no longer truncates to neutral 2
+  (`copy_number` is now a double; mosaic gains/losses classify correctly).
+- **Compound tandem-dup subtypes**: `<TDUP:ME>`, `<DUP:TANDEM:X>` classify as
+  TDUP instead of falling through to UNKNOWN/DUP (a 50kb `<TDUP:INT>` was
+  previously annotated as a ~9bp insertion).
+- **get_format_value** rewritten on `vep::split_line` (was two hand-rolled
+  tokenizers); README test table corrected and recounted.
+
+### Tests
+- +59 (1209 → 1268): new `test_mito.cpp` (15) and `test_cnv_annotation.cpp` (21)
+  suites, CNV parity/copy-number-attribution/SV-field tests in
+  `test_structural_variant.cpp`, format-detection regressions in
+  `test_cli.cpp`, and `m.` HGVS tests in `test_hgvs.cpp`.
+
 ## [1.7.0] - 2026-06-23
 
 WGS / DRAGEN VCF support.
